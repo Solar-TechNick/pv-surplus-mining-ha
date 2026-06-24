@@ -55,3 +55,24 @@ async def test_emergency_stop_applies_state_zero(hass):
     data = await c._async_update_data()
     assert data["emergency"] is True and data["target_state"] == 0
     assert a.applied[-1] == ("curtail", "sleep")
+
+
+async def test_recovery_clears_unavailable_latch(hass):
+    """If a miner was latched unavailable but get_status returns online=True,
+    the coordinator should clear the latch and restore max_available_state."""
+    fleet, a = _fleet()
+    # Start with the miner latched as unavailable (e.g. after N write failures)
+    a.available = False
+    a.failure_count = 3
+
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True)
+    c = PvSurplusCoordinator(hass, cfg, fleet, grid_entity="sensor.grid_power", import_positive=True)
+    hass.states.async_set("sensor.grid_power", "-3000")
+
+    data = await c._async_update_data()
+
+    # The recovery pass should have cleared the latch
+    assert a.available is True
+    assert a.failure_count == 0
+    # max_available_state should now reflect the re-admitted miner (state 1 is reachable)
+    assert data["max_available_state"] == 1

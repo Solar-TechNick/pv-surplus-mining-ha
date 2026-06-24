@@ -1,7 +1,6 @@
 """Control-loop coordinator: read sensors → tick → apply, on the control interval."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import timedelta
 
@@ -59,6 +58,16 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             except AdapterError:
                 statuses[mid] = None
 
+        # Recovery pass: if a miner was latched unavailable but a successful status read
+        # shows it is now reachable and online, clear the latch so it can be commanded again
+        # (including emergency-sleep). A non-None status proves the REST API responded.
+        for mid, ctrl in self.fleet.miners.items():
+            s = statuses.get(mid)
+            if not ctrl.available and s is not None and s.online:
+                ctrl.available = True
+                ctrl.failure_count = 0
+                _LOGGER.info("Miner %s is reachable again; clearing unavailable latch.", mid)
+
         available_ids = {
             mid for mid, ctrl in self.fleet.miners.items()
             if ctrl.available and statuses.get(mid) is not None and statuses[mid].online
@@ -72,6 +81,13 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         grid_w = self._read_grid()
         sample = grid_w if grid_w is not None else 0.0   # invalid grid -> neutral -> hold (never increase)
 
+        # Note: `telemetry_stale` and `repeated_failures` are intentionally left at their
+        # defaults (False). This integration handles grid-sensor loss by holding (feeding a
+        # neutral 0.0 sample — see `sample` above), and per-miner write failures by shrinking
+        # `max_available_state` (excluding only the affected miner via the availability latch
+        # in miner.py), rather than using the vendored core's whole-fleet emergency-to-zero,
+        # which would over-react. Sustained-grid-loss escalation is a possible future
+        # enhancement when `telemetry_stale` could be wired to a consecutive-None counter.
         inputs = ControlInputs(
             auto_enabled=self.auto_enabled,
             emergency_stop=self.emergency_stop,

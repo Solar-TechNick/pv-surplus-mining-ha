@@ -1,6 +1,8 @@
 """Pure normalization of an HA sensor state into +import/−export watts."""
 from __future__ import annotations
 
+import math
+
 _INVALID = {"unknown", "unavailable", "none", ""}
 
 
@@ -19,4 +21,6 @@ def normalize_grid_power(raw, import_positive: bool) -> float | None:
             value = float(raw)
         except (TypeError, ValueError):
             return None
+    if not math.isfinite(value):
+        return None
     return value if import_positive else -value

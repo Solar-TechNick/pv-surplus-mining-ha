@@ -10,8 +10,7 @@ CONF_BATTERY_ENTITY = "battery_entity"
 CONF_IMPORT_POSITIVE = "grid_import_positive"
 CONF_FLEET_STATES_PATH = "fleet_states_path"
 
-# Options keys (mirror control.yaml). Defaults below are copied verbatim from
-# sol-miner-vs/config/control.yaml.
+# Options keys — match the control.yaml schema documented in the design spec.
 OPT_LOOP_INTERVAL_S = "loop_interval_s"
 OPT_AVG_WINDOW_S = "avg_window_s"
 OPT_EXPORT_RESERVE_W = "export_reserve_w"

@@ -1,7 +1,6 @@
 """Config + options flow for pv_surplus_mining."""
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import voluptuous as vol
@@ -14,13 +13,12 @@ from .const import (
     CONF_BATTERY_ENTITY, CONF_FLEET_STATES_PATH, CONF_GRID_ENTITY, CONF_IMPORT_POSITIVE,
     CONF_MINERS, CONF_PV_ENTITY, DEFAULT_FLEET_STATES_FILENAME, DEFAULT_MINERS, DOMAIN,
 )
-from .errors import AdapterError, ConfigError
+from .errors import ConfigError
 from .fleet_states import load_fleet_states, validate_fleet_states
 from .miner import AioBraiinsClient, MinerConfig
 from .models import ControlConfig
 
 _ENTITY_SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
-_OPTIONAL_SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
 
 
 def _user_schema(defaults: dict) -> vol.Schema:
@@ -66,7 +64,7 @@ class PvSurplusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                       username=m["username"])
                     try:
                         await AioBraiinsClient(cfg, m["password"], session).login()
-                    except (AdapterError, Exception):  # noqa: BLE001 - any network error blocks setup
+                    except Exception:  # noqa: BLE001 - any network error blocks setup
                         errors["base"] = "cannot_connect"
                         break
 

@@ -16,3 +16,8 @@ def test_export_positive_meter_is_negated():
     # meter reports +export; internal convention is +import, so flip
     assert normalize_grid_power("1500", False) == -1500.0
     assert normalize_grid_power(-800, True) == -800.0
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", float("inf")])
+def test_non_finite_returns_none(raw):
+    assert normalize_grid_power(raw, True) is None
