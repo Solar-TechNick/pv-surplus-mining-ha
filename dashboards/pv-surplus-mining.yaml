@@ -1,0 +1,46 @@
+title: PV-Surplus Mining
+views:
+  - title: Mining
+    path: mining
+    cards:
+      - type: entities
+        title: Controls
+        entities:
+          - entity: switch.pv_surplus_mining_normal_mode
+            name: Normal mode (24/7)
+          - entity: switch.pv_surplus_mining_automation_enabled
+            name: Automation enabled
+          - entity: switch.pv_surplus_mining_emergency_stop
+            name: Emergency stop
+          - entity: switch.pv_surplus_mining_manual_override
+            name: Manual override
+          - entity: number.pv_surplus_mining_manual_state
+          - entity: number.pv_surplus_mining_max_state
+      - type: gauge
+        entity: sensor.pv_surplus_mining_grid_power
+        name: Grid power (+import / -export)
+        min: -12000
+        max: 12000
+      - type: entities
+        title: Status
+        entities:
+          - entity: sensor.pv_surplus_mining_fleet_state
+          - entity: sensor.pv_surplus_mining_target_state
+          - entity: sensor.pv_surplus_mining_max_available_state
+          - entity: sensor.pv_surplus_mining_grid_power_avg
+      - type: history-graph
+        title: Surplus tracking (24 h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.pv_surplus_mining_grid_power
+          - entity: sensor.pv_surplus_mining_fleet_state
+# --- Per-miner card template (copy one block per miner) ----------------------
+# Per-miner sensors are named sensor.pv_surplus_mining_<id>_power and
+# sensor.pv_surplus_mining_<id>_temperature, where <id> is the slug of the miner
+# name you set when adding it. Add under `cards:` above, replacing <id> and <name>:
+#
+#      - type: entities
+#        title: <name>
+#        entities:
+#          - entity: sensor.pv_surplus_mining_<id>_power
+#          - entity: sensor.pv_surplus_mining_<id>_temperature

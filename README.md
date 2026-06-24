@@ -63,6 +63,16 @@ a repository file.
   miner is marked unavailable after repeated failures (the loop then refuses to
   target any state that needs it).
 
+## Dashboard
+
+A ready-made dashboard is in [`dashboards/pv-surplus-mining.yaml`](dashboards/pv-surplus-mining.yaml).
+Add it via **Settings → Dashboards → ⋮ → New dashboard from YAML** (or paste the
+cards into an existing dashboard in YAML edit mode). It shows the mode/control
+switches, a grid-power gauge (+import / −export), fleet/target/max-available
+state, and a 24 h surplus-tracking graph. Per-miner power/temperature cards are
+a copy-per-miner template in the YAML's trailing comment — duplicate one block
+per miner, replacing `<id>` with your miner's slug.
+
 ## Fleet & ramp order
 
 Ramps **lowest-minimum first** to capture small surpluses — Antminer
