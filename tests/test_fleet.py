@@ -153,3 +153,16 @@ def test_load_fleet_states_empty_states(tmp_path):
     p2.write_text("{}")         # no states key at all
     with pytest.raises(ConfigError):
         load_fleet_states(p2)
+
+
+def test_max_available_state_shrinks_when_miner_unavailable():
+    a, b = _ctrl("a", 1), _ctrl("b", 2)
+    states = {
+        0: {"a": FleetStateTarget(action="sleep"), "b": FleetStateTarget(action="sleep")},
+        1: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="sleep")},
+        2: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="active", power_w=1500)},
+    }
+    fc = FleetController({"a": a, "b": b}, states)
+    assert fc.max_available_state({"a", "b"}) == 2
+    assert fc.max_available_state({"a"}) == 1     # b down -> can't reach state 2
+    assert fc.max_available_state(set()) == 0

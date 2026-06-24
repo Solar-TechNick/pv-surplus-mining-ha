@@ -20,6 +20,17 @@ class FleetController:
     def max_state(self) -> int:
         return max(self.states) if self.states else 0
 
+    def max_available_state(self, available_ids: set[str]) -> int:
+        best = 0
+        for sid in sorted(self.states):
+            needs = {
+                mid for mid, t in self.states[sid].items()
+                if t.action == "active" and t.power_w is not None
+            }
+            if needs <= available_ids:
+                best = sid
+        return best
+
     async def apply_state(self, state_id: int, *, force: bool = False) -> list[CommandResult]:
         if state_id not in self.states:
             raise KeyError(f"unknown fleet state {state_id}")
