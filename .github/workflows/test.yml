@@ -9,6 +9,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # 3.13 matches the Home Assistant version pinned by the test harness
+          # (pytest-homeassistant-custom-component); on 3.12 pip backtracks to an
+          # older harness that lacks the c-ares thread allowance and fails teardown.
+          python-version: "3.13"
       - run: pip install -r requirements_test.txt
       - run: python -m pytest -v

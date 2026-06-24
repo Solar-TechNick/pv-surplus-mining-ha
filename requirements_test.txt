@@ -1,5 +1,8 @@
 # pytest-homeassistant-custom-component pins a compatible Home Assistant + pytest stack.
-pytest-homeassistant-custom-component>=0.13.100
+# >=0.13.316: its cleanup check allows the c-ares (pycares) "_run_safe_shutdown_loop"
+# daemon thread the HA client session spawns; older versions fail teardown on it.
+# This version pins a Python-3.13 Home Assistant — CI must run on Python 3.13.
+pytest-homeassistant-custom-component>=0.13.316
 pydantic>=2,<3
 PyYAML>=6
 aioresponses>=0.7.6
