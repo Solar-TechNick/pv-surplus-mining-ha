@@ -138,3 +138,33 @@ async def test_build_coordinator_uses_custom_file_override(hass, tmp_path):
     coordinator = await async_build_coordinator(hass, entry)
     assert sorted(coordinator.fleet.states) == [0, 1]
     assert coordinator.fleet.states[1]["a"].power_w == 1000
+
+
+async def test_not_engaged_never_commands_miners(hass):
+    # automation off, normal off, emergency-stop off -> observe-only
+    c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=False,
+                                      emergency_import_threshold_w=1200, emergency_required_duration_s=0))
+    c.loop.current_state = 1  # pretend miners are running
+    hass.states.async_set("sensor.grid_power", "5000")  # big import that WOULD emergency-pause if engaged
+    data = await c._async_update_data()
+    assert a.applied == []                 # hands-off: miners are never commanded
+    assert data["emergency"] is False
+    assert "observe-only" in data["reason"]
+
+
+async def test_engaged_via_emergency_switch_still_commands(hass):
+    c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=False))
+    c.loop.current_state = 1
+    c.emergency_stop = True                # explicit engagement
+    hass.states.async_set("sensor.grid_power", "0")
+    await c._async_update_data()
+    assert a.applied and a.applied[-1] == ("curtail", "sleep")   # forced to state 0
+
+
+async def test_simulate_grid_overrides_real_sensor(hass):
+    c, a = _coord(hass)  # enabled_default=True
+    hass.states.async_set("sensor.grid_power", "5000")  # real sensor says import
+    c.simulate_grid = True
+    c.simulated_grid_w = -3000  # simulate 3 kW surplus/export
+    data = await c._async_update_data()
+    assert data["grid_w"] == -3000   # the simulated value drives the loop, not the sensor

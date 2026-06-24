@@ -46,8 +46,14 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         self.manual_state = 0
         self.max_state = config.max_state
         self.normal_mode = False
+        # test/simulation: when simulate_grid is on, the loop uses simulated_grid_w
+        # (+import / -export) instead of the real grid sensor.
+        self.simulate_grid = False
+        self.simulated_grid_w = 0.0
 
     def _read_grid(self) -> float | None:
+        if self.simulate_grid:
+            return float(self.simulated_grid_w)
         from .normalize import normalize_grid_power
         state = self.hass.states.get(self.grid_entity)
         return normalize_grid_power(state.state if state else None, self.import_positive)
@@ -103,7 +109,13 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         )
         decision = self.loop.tick(sample, inputs)
 
-        if decision.changed or decision.emergency:
+        # The controller only commands miners when the user has ENGAGED it
+        # (automation on, normal mode on, or the emergency-stop switch on). With
+        # everything off it is observe-only and never touches the miners — so a
+        # hands-off install is not paused by the hard-import safety reacting to
+        # the miners' own draw.
+        engaged = self.auto_enabled or self.normal_mode or self.emergency_stop
+        if engaged and (decision.changed or decision.emergency):
             try:
                 await self.fleet.apply_state(decision.target_state, force=decision.emergency)
             except (AdapterError, KeyError) as exc:
@@ -113,10 +125,10 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             "grid_w": grid_w,
             "grid_avg_w": self.loop.grid_avg_w,
             "current_state": self.loop.current_state,
-            "target_state": decision.target_state,
+            "target_state": decision.target_state if engaged else self.loop.current_state,
             "max_available_state": self.loop.max_available_state,
-            "reason": decision.reason,
-            "emergency": decision.emergency,
+            "reason": decision.reason if engaged else "observe-only (controller not engaged)",
+            "emergency": decision.emergency and engaged,
             "miners": {mid: (s.model_dump() if s else None) for mid, s in statuses.items()},
         }
 
