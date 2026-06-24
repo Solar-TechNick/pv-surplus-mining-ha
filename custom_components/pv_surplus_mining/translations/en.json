@@ -1,0 +1,38 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PV-Surplus Mining",
+        "description": "Enter each miner's IP and password, choose your grid/PV sensors, and point to the fleet-states file.",
+        "data": {
+          "s21plus_01_ip": "S21+ IP address",
+          "s21plus_01_password": "S21+ password",
+          "s19jproplus_01_ip": "S19j Pro+ IP address",
+          "s19jproplus_01_password": "S19j Pro+ password",
+          "s19jpro_01_ip": "S19j Pro IP address",
+          "s19jpro_01_password": "S19j Pro password",
+          "grid_entity": "Grid power sensor",
+          "pv_entity": "Inverter PV sensor (optional)",
+          "battery_entity": "Battery SOC sensor (optional)",
+          "grid_import_positive": "Grid sensor reports import as positive",
+          "fleet_states_path": "Path to fleet-states.yaml"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach/authenticate with one or more miners.",
+      "bad_fleet_states": "The fleet-states file is missing, invalid, or does not match the configured miners."
+    },
+    "abort": {
+      "already_configured": "PV-Surplus Mining is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Control tuning",
+        "description": "Thresholds and durations for the control loop (mirrors control.yaml)."
+      }
+    }
+  }
+}
