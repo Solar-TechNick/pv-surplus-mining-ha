@@ -250,9 +250,12 @@ entities, normalization, and the full test suite.
 - **aiohttp port fidelity:** the safety semantics must survive the httpx→aiohttp
   move intact; the ported safety tests are the guard. Mitigated by porting the
   tests first.
-- **Coordinator timing:** HA's coordinator interval has jitter; the loop's
-  timers use measured elapsed time (not tick count) to stay correct — carried
-  over from the original `ControllerLoop`.
+- **Coordinator timing:** the vendored `ControllerLoop` advances its timers by
+  a fixed `dt = loop_interval_s` per `tick()` (not by measured wall-clock), so it
+  assumes reasonably regular ticks. Under HA scheduler jitter a late/skipped tick
+  makes the sustained-condition timers accrue *slower* than real time — i.e. it
+  errs toward being more conservative about ramp-up, which is safe. The
+  coordinator's `update_interval` is set to `loop_interval_s`.
 - **HACS-in-subdir:** not applicable here — standalone repo with
   `custom_components/` at root is exactly what HACS expects.
 
