@@ -74,7 +74,8 @@ Native HA entities  ◄────────────┤  exposes state + 
                                  │
                                  ▼
                           Antminer fleet (Braiins OS+)
-                          S21+ .212 · S19j Pro+ .211 · S19j Pro .210
+                          S21+ (primary) · S19j Pro+ (secondary) · S19j Pro (tertiary)
+                          (IPs/credentials supplied at runtime via the config flow)
 ```
 
 A single `DataUpdateCoordinator` ticks on the configured control interval. Each
