@@ -80,13 +80,17 @@ async def _detect(hass, name: str, ip: str, password: str) -> dict:
     try:
         await client.login()
         details = await client.get_miner_details()
-        out["model"] = details.get("platform") or details.get("miner_identity") or ""
-        rng = parse_power_constraints(await client.get_constraints())
+        ident = details.get("miner_identity") or {}
+        out["model"] = ident.get("miner_model") or ident.get("name") or ""
+        constraints = await client.get_constraints()
+        rng = parse_power_constraints(constraints)
         if rng:
             out["min_power_w"], out["max_power_w"], _ = rng
+        # Prefer the firmware's recommended default power target, then the current target.
+        default_w = (((constraints.get("tuner_constraints") or {}).get("power_target") or {})
+                     .get("default") or {}).get("watt")
         cur = (await client.get_tuner_state()).power_target_w
-        if cur:
-            out["default_power_w"] = int(cur)
+        out["default_power_w"] = int(default_w or cur or 0)
         if not out["default_power_w"] and out["max_power_w"]:
             out["default_power_w"] = (out["min_power_w"] + out["max_power_w"]) // 2
     except Exception:  # noqa: BLE001 - detection is best-effort; manual entry on failure

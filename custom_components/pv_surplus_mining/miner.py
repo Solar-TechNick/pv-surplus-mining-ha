@@ -73,7 +73,8 @@ class AioBraiinsClient:
             raise AuthError(f"{self.cfg.id}: login response had no token")
 
     def _auth_headers(self) -> dict:
-        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        # Braiins OS+ expects the raw token in Authorization (NOT "Bearer <token>").
+        return {"Authorization": self.token} if self.token else {}
 
     async def _request_json(self, method: str, path: str, **kwargs) -> dict:
         if self.token is None:
@@ -101,11 +102,16 @@ class AioBraiinsClient:
 
     async def get_tuner_state(self) -> TunerState:
         raw = await self._request_json("GET", "/performance/tuner-state")
-        target = (raw.get("power_target") or {}).get("watt")
-        return TunerState(power_target_w=target, mode=raw.get("mode"), profile=raw.get("profile"), raw=raw)
+        # Real shape: mode_state.powertargetmodestate.current_target.watt
+        target = (((raw.get("mode_state") or {}).get("powertargetmodestate") or {})
+                  .get("current_target") or {}).get("watt")
+        return TunerState(power_target_w=target, raw=raw)
 
     async def get_constraints(self) -> dict:
         return await self._request_json("GET", "/configuration/constraints")
+
+    async def get_cooling_state(self) -> dict:
+        return await self._request_json("GET", "/cooling/state")
 
     async def set_power_target(self, watt: int) -> None:
         await self._request_json("PUT", "/performance/power-target", json={"watt": watt})
@@ -142,17 +148,22 @@ class MinerController:
         try:
             details = await self.client.get_miner_details()
             stats = await self.client.get_stats()
+            cooling = await self.client.get_cooling_state()
             tuner = await self.client.get_tuner_state()
         except AdapterError:
             return MinerStatus(miner_id=self.cfg.id, online=False, available=self.available)
+        # status enum: 0 unspecified, 1 not_started, 2 normal, 3 paused, 4 suspended, 5 restricted
+        status = details.get("status")
+        actual_power_w = ((stats.get("power_stats") or {}).get("approximated_consumption") or {}).get("watt")
+        ghs = (((stats.get("miner_stats") or {}).get("real_hashrate") or {}).get("last_1m") or {}).get("gigahash_per_second")
+        temp_c = ((cooling.get("highest_temperature") or {}).get("temperature") or {}).get("degree_c")
         return MinerStatus(
             miner_id=self.cfg.id,
-            online=str(details.get("status", "")).lower() != "offline",
+            online=status not in (None, 0, 1),
             power_target_w=tuner.power_target_w,
-            actual_power_w=(stats.get("power") or {}).get("approx"),
-            hashrate_ths=stats.get("hashrate_ths"),
-            temp_max_c=stats.get("temp_max_c"),
-            tuner_mode=tuner.mode,
+            actual_power_w=int(actual_power_w) if actual_power_w is not None else None,
+            hashrate_ths=round(ghs / 1000.0, 2) if ghs is not None else None,
+            temp_max_c=round(float(temp_c), 1) if temp_c is not None else None,
             available=self.available,
         )
 
@@ -182,8 +193,8 @@ class MinerController:
         verified = False
         try:
             details = await self.client.get_miner_details()
-            paused_statuses = {"paused", "suspended", "stopped", "not_started"}
-            verified = str(details.get("status", "")).lower() in paused_statuses
+            # status enum: 3=paused, 4=suspended (a successfully paused miner)
+            verified = details.get("status") in (3, 4)
         except Exception:  # noqa: BLE001
             pass
         self._audit({"miner": self.cfg.id, "action": "pause", "target_w": 0, "result": "ok", "verified": verified})
