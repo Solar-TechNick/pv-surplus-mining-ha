@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from aioresponses import aioresponses
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -40,9 +42,15 @@ async def test_full_flow_creates_entry(hass, tmp_path):
     fleet = tmp_path / "fleet-states.yaml"; fleet.write_text(FLEET_YAML)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert result["type"] is FlowResultType.FORM
-    with aioresponses() as m:
+    # Patch async_setup_entry so creating the entry does not auto-start the real
+    # integration (coordinator + client session) during this flow-only test —
+    # otherwise the HA harness flags a lingering shutdown thread in teardown.
+    with aioresponses() as m, patch(
+        "custom_components.pv_surplus_mining.async_setup_entry", return_value=True
+    ):
         _mock_logins(m, ok=True)
         result = await hass.config_entries.flow.async_configure(result["flow_id"], _form_input(fleet))
+        await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert len(result["data"]["miners"]) == 3
 

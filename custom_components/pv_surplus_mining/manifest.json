@@ -1,12 +1,12 @@
 {
   "domain": "pv_surplus_mining",
   "name": "PV-Surplus Mining",
-  "version": "0.1.0",
-  "documentation": "https://github.com/Solar-TechNick/pv-surplus-mining-ha",
-  "issue_tracker": "https://github.com/Solar-TechNick/pv-surplus-mining-ha/issues",
   "codeowners": ["@Solar-TechNick"],
-  "iot_class": "local_polling",
-  "integration_type": "hub",
   "config_flow": true,
-  "requirements": ["pydantic>=2,<3", "PyYAML>=6"]
+  "documentation": "https://github.com/Solar-TechNick/pv-surplus-mining-ha",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Solar-TechNick/pv-surplus-mining-ha/issues",
+  "requirements": ["pydantic>=2,<3", "PyYAML>=6"],
+  "version": "0.1.0"
 }
