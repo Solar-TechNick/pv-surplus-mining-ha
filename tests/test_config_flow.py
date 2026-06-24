@@ -1,6 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from aioresponses import aioresponses
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.pv_surplus_mining.const import (
@@ -28,14 +27,6 @@ def _form_input(path):
         out[f"{mid}_ip"] = ip
         out[f"{mid}_password"] = "pw"
     return out
-
-
-def _mock_logins(m, ok=True):
-    for ip in IPS.values():
-        if ok:
-            m.post(f"http://{ip}/api/v1/auth/login", payload={"token": "T"})
-        else:
-            m.post(f"http://{ip}/api/v1/auth/login", status=403)
 
 
 async def test_full_flow_creates_entry(hass, tmp_path):
@@ -77,7 +68,17 @@ async def test_bad_fleet_states_errors(hass, tmp_path):
 async def test_cannot_connect_errors(hass, tmp_path):
     fleet = tmp_path / "fleet-states.yaml"; fleet.write_text(FLEET_YAML)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    with aioresponses() as m:
-        _mock_logins(m, ok=False)
+    # Mock the connectivity check so login fails without creating a real HA client
+    # session (a real session leaves a lingering shutdown thread the HA harness
+    # fails on in teardown). This still exercises the flow's cannot_connect mapping.
+    mock_client = MagicMock()
+    mock_client.return_value.login = AsyncMock(side_effect=OSError("connection refused"))
+    with patch(
+        "custom_components.pv_surplus_mining.config_flow.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.pv_surplus_mining.config_flow.AioBraiinsClient", mock_client
+    ):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], _form_input(fleet))
+    assert result["type"] is FlowResultType.FORM
     assert result["errors"]["base"] == "cannot_connect"
