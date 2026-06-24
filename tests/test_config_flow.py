@@ -30,9 +30,38 @@ async def test_initial_flow_creates_entry_with_one_miner(hass):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {
             "model": "Antminer S21+", "min_power_w": 2457, "max_power_w": 6435, "default_power_w": 3878,
         })
+        # now offered "add another?" — finish with one miner
+        assert result["type"] is FlowResultType.MENU and result["step_id"] == "add_another"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "finish"})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     miners = result["options"][CONF_MINERS]
     assert len(miners) == 1 and miners[0]["id"] == "s21" and miners[0]["default_power_w"] == 3878
+
+
+async def test_initial_flow_adds_multiple_miners(hass):
+    with patch("custom_components.pv_surplus_mining.config_flow._detect",
+               AsyncMock(return_value=DETECTED)):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+            CONF_GRID_ENTITY: "sensor.grid", CONF_IMPORT_POSITIVE: True,
+            "name": "Alpha", "ip": "10.0.0.1", "password": "pw"})
+        assert result["step_id"] == "miner_detail"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+            "model": "m", "min_power_w": 800, "max_power_w": 6435, "default_power_w": 3000})
+        assert result["step_id"] == "add_another"
+        # add a second miner
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "add_miner"})
+        assert result["step_id"] == "add_miner"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+            "name": "Beta", "ip": "10.0.0.2", "password": "pw"})
+        assert result["step_id"] == "miner_detail"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+            "model": "m", "min_power_w": 900, "max_power_w": 6435, "default_power_w": 3100})
+        assert result["step_id"] == "add_another"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "finish"})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    miners = result["options"][CONF_MINERS]
+    assert len(miners) == 2 and {m["id"] for m in miners} == {"alpha", "beta"}
 
 
 async def test_options_add_and_remove_miner(hass):

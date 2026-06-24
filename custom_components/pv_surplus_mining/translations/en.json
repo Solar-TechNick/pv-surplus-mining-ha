@@ -24,6 +24,21 @@
           "max_power_w": "Maximum power (W)",
           "default_power_w": "Default power target (W)"
         }
+      },
+      "add_another": {
+        "title": "Add another miner?",
+        "menu_options": {
+          "add_miner": "Add another miner",
+          "finish": "Finish setup"
+        }
+      },
+      "add_miner": {
+        "title": "Add miner – connection",
+        "data": {
+          "name": "Miner name",
+          "ip": "Miner IP address",
+          "password": "Miner password"
+        }
       }
     },
     "error": {

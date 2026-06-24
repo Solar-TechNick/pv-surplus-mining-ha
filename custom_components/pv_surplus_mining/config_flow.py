@@ -104,6 +104,7 @@ class PvSurplusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._hub: dict = {}
         self._basics: dict = {}
+        self._miners: list[dict] = []   # accumulate miners across the setup loop
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
@@ -123,13 +124,26 @@ class PvSurplusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             d = await _detect(self.hass, self._basics["name"], self._basics["ip"], self._basics["password"])
             return self.async_show_form(step_id="miner_detail", data_schema=_detail_schema(d))
-        miner = build_miner(self._basics["name"], self._basics["ip"], self._basics["password"],
-                            user_input["model"], user_input["min_power_w"], user_input["max_power_w"],
-                            user_input["default_power_w"], taken_ids=set())
-        miners = recompute_priorities([miner])
+        self._miners.append(build_miner(
+            self._basics["name"], self._basics["ip"], self._basics["password"],
+            user_input["model"], user_input["min_power_w"], user_input["max_power_w"],
+            user_input["default_power_w"], taken_ids={m["id"] for m in self._miners}))
+        return await self.async_step_add_another()
+
+    async def async_step_add_another(self, user_input: dict[str, Any] | None = None):
+        # After each miner is added, offer to add another or finish.
+        return self.async_show_menu(step_id="add_another", menu_options=["add_miner", "finish"])
+
+    async def async_step_add_miner(self, user_input: dict[str, Any] | None = None):
+        if user_input is None:
+            return self.async_show_form(step_id="add_miner", data_schema=_basics_schema({}))
+        self._basics = {"name": user_input["name"], "ip": user_input["ip"], "password": user_input["password"]}
+        return await self.async_step_miner_detail()
+
+    async def async_step_finish(self, user_input: dict[str, Any] | None = None):
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-        options = {**self._hub, CONF_MINERS: miners, **ControlConfig().model_dump()}
+        options = {**self._hub, CONF_MINERS: recompute_priorities(self._miners), **ControlConfig().model_dump()}
         return self.async_create_entry(title="PV-Surplus Mining", data={}, options=options)
 
     @staticmethod
