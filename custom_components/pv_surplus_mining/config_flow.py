@@ -83,7 +83,7 @@ async def _detect(hass, name: str, ip: str, password: str) -> dict:
 
 
 class PvSurplusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1   # bumped to 2 in Task 6, together with async_migrate_entry
+    VERSION = 2
 
     def __init__(self) -> None:
         self._hub: dict = {}
