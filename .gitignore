@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Home Assistant test scaffolding
+.storage/
+home-assistant.log*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local secrets (must never be committed; HA stores creds in its encrypted .storage)
+secrets.yaml
+*.env
