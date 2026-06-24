@@ -36,14 +36,24 @@ a repository file.
 
 ## Entities
 
-- Switches: **Automation enabled**, **Emergency stop**, **Manual override**
+- Switches: **Automation enabled**, **Emergency stop**, **Manual override**,
+  **Normal mode**
 - Numbers: **Manual state**, **Max state**
 - Sensors: **Fleet state**, **Target state**, **Max available state**,
   **Grid power** (+import/−export, `unknown` when the source is invalid),
   **Grid power (avg)**, and per-miner **power** / **temperature**
 
+### Modes
+
+- **PV surplus** (default): the controller follows grid surplus, ramping miners
+  up/down to consume export without importing.
+- **Normal mode** (`Normal mode` switch on): every available miner runs at its
+  default power 24/7, ignoring surplus. **Emergency stop still overrides it.**
+
 ## Safety
 
+- A slept miner is **truly paused** (Braiins `actions/pause`, ~0 W), not idled at
+  its minimum — so the fleet can fully stop when there's no surplus.
 - Grid sensor `unknown`/`unavailable` → the loop holds, never ramps up.
 - On HA restart the controller starts at state 0 and reads real miner state
   before ramping.
@@ -53,6 +63,10 @@ a repository file.
   miner is marked unavailable after repeated failures (the loop then refuses to
   target any state that needs it).
 
-## Fleet & merit order
+## Fleet & ramp order
 
-Antminer **S21+** → **S19j Pro+** → **S19j Pro** (most-efficient first).
+Ramps **lowest-minimum first** to capture small surpluses — Antminer
+**S19j Pro+** → **S19j Pro** → **S21+** (the S21+'s high minimum power means it
+only joins once there's a large, stable surplus). See
+[`examples/fleet-states.yaml`](examples/fleet-states.yaml) for a complete
+state matrix built from real tuner ranges.
