@@ -1,0 +1,5 @@
+# pytest-homeassistant-custom-component pins a compatible Home Assistant + pytest stack.
+pytest-homeassistant-custom-component>=0.13.100
+pydantic>=2,<3
+PyYAML>=6
+aioresponses>=0.7.6
