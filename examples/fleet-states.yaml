@@ -1,72 +1,91 @@
-# PV-surplus fleet-state matrix — example built from a real fleet's tuner ranges.
+# ============================================================================
+# PV-surplus fleet-state matrix  —  recommended starting point
+# ============================================================================
+# Deploy to:  <HA config>/pv_surplus_mining/fleet-states.yaml
 #
-# Fleet (ramped LOWEST-MINIMUM first, to capture small surpluses):
+# Fleet, ramped LOWEST-MINIMUM first (captures small surpluses; the S21+'s high
+# minimum means it only joins at large, stable surplus):
 #   s19jproplus_01  Antminer S19j Pro+   min 817 W   default 3300 W
 #   s19jpro_01      Antminer S19j Pro    min 944 W   default 3068 W
 #   s21plus_01      Antminer S21+        min 2457 W  default 3878 W
 #
-# Operating points are capped at each miner's DEFAULT (the firmware's reported
-# "Max 6435 W" is the absolute tuner ceiling / overclock limit, NOT a validated
-# sustained point — extend the top states only after a commissioning sweep).
+# Design rules used:
+#   * State 0 = whole fleet truly OFF (paused, ~0 W) — no surplus, no import.
+#   * One miner is ramped to full before the next starts (fewer thermal starts,
+#     better efficiency than several miners idling).
+#   * Steps are ~600–710 W — close to the default step_up_export_threshold_w
+#     (700 W), so each up-step lands the fleet near power balance.
+#   * Operating points are capped at each miner's DEFAULT. The firmware's
+#     "Max 6435 W" is the overclock ceiling, NOT a validated point — only extend
+#     the top states after a commissioning sweep.
 #
-# IMPORTANT: `action: sleep` should mean the miner is fully OFF (~0 W). The S21+
-# minimum is 2457 W, so if "sleep" only lowered the power target to the minimum,
-# the whole fleet would never draw less than ~4.2 kW — defeating surplus control.
-# The integration must curtail/pause a slept miner to ~0 W (see notes from Claude).
+# Approx total fleet draw per state (W) = roughly the surplus each state targets:
+#   0:0  1:817  2:1450  3:2080  4:2700  5:3300  6:4244  7:4950  8:5660
+#   9:6368  10:8825  11:9538  12:10246
 #
-# Approx total fleet draw per state (active miners only):
-#   0:0  1:817  2:1400  3:2100  4:2700  5:3300  6:4244  7:4900  8:5600
-#   9:6368  10:8825  11:9468  12:10246 W
+# NOTE on state 9 -> 10: the S21+ can only start at >=2457 W, so that single
+# up-step adds ~2457 W. With the default 700 W threshold the controller will
+# briefly overshoot into import, then fast-ramp back down. If that bothers you,
+# raise the export buffer so this transition only fires with a large surplus.
+# ============================================================================
 
 states:
-  0:    # all off — no surplus
+
+  # --- no surplus: everything off -----------------------------------------
+  0:
     s19jproplus_01: { action: sleep }
     s19jpro_01:     { action: sleep }
     s21plus_01:     { action: sleep }
-  1:    # S19j Pro+ at minimum
+
+  # --- phase 1: S19j Pro+ ramps 817 -> 3300 W ------------------------------
+  1:
     s19jproplus_01: { action: active, power_w: 817 }
     s19jpro_01:     { action: sleep }
     s21plus_01:     { action: sleep }
   2:
-    s19jproplus_01: { action: active, power_w: 1400 }
+    s19jproplus_01: { action: active, power_w: 1450 }
     s19jpro_01:     { action: sleep }
     s21plus_01:     { action: sleep }
   3:
-    s19jproplus_01: { action: active, power_w: 2100 }
+    s19jproplus_01: { action: active, power_w: 2080 }
     s19jpro_01:     { action: sleep }
     s21plus_01:     { action: sleep }
   4:
     s19jproplus_01: { action: active, power_w: 2700 }
     s19jpro_01:     { action: sleep }
     s21plus_01:     { action: sleep }
-  5:    # S19j Pro+ at default (full)
+  5:    # S19j Pro+ at default
     s19jproplus_01: { action: active, power_w: 3300 }
     s19jpro_01:     { action: sleep }
     s21plus_01:     { action: sleep }
-  6:    # add S19j Pro at minimum
+
+  # --- phase 2: add S19j Pro, ramps 944 -> 3068 W --------------------------
+  6:
     s19jproplus_01: { action: active, power_w: 3300 }
     s19jpro_01:     { action: active, power_w: 944 }
     s21plus_01:     { action: sleep }
   7:
     s19jproplus_01: { action: active, power_w: 3300 }
-    s19jpro_01:     { action: active, power_w: 1600 }
+    s19jpro_01:     { action: active, power_w: 1650 }
     s21plus_01:     { action: sleep }
   8:
     s19jproplus_01: { action: active, power_w: 3300 }
-    s19jpro_01:     { action: active, power_w: 2300 }
+    s19jpro_01:     { action: active, power_w: 2360 }
     s21plus_01:     { action: sleep }
   9:    # both S19j units at default
     s19jproplus_01: { action: active, power_w: 3300 }
     s19jpro_01:     { action: active, power_w: 3068 }
     s21plus_01:     { action: sleep }
-  10:   # add S21+ at minimum (big +2457 W step — see notes)
+
+  # --- phase 3: add S21+, ramps 2457 -> 3878 W -----------------------------
+  10:   # S21+ enters at its minimum (big +2457 W step — see note above)
     s19jproplus_01: { action: active, power_w: 3300 }
     s19jpro_01:     { action: active, power_w: 3068 }
     s21plus_01:     { action: active, power_w: 2457 }
   11:
     s19jproplus_01: { action: active, power_w: 3300 }
     s19jpro_01:     { action: active, power_w: 3068 }
-    s21plus_01:     { action: active, power_w: 3100 }
+    s21plus_01:     { action: active, power_w: 3170 }
   12:   # full fleet at default
     s19jproplus_01: { action: active, power_w: 3300 }
     s19jpro_01:     { action: active, power_w: 3068 }
