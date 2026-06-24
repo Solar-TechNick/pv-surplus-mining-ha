@@ -1,4 +1,4 @@
-"""Config + options flow for pv_surplus_mining."""
+"""Config + options flow for pv_surplus_mining (dynamic miners)."""
 from __future__ import annotations
 
 from typing import Any
@@ -10,100 +10,200 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
-    CONF_BATTERY_ENTITY, CONF_FLEET_STATES_PATH, CONF_GRID_ENTITY, CONF_IMPORT_POSITIVE,
-    CONF_MINERS, CONF_PV_ENTITY, DEFAULT_FLEET_STATES_FILENAME, DEFAULT_MINERS, DOMAIN,
+    CONF_BATTERY_ENTITY, CONF_FLEET_STATES_PATH, CONF_GRID_ENTITY,
+    CONF_IMPORT_POSITIVE, CONF_MINERS, CONF_PV_ENTITY, DOMAIN,
 )
 from .errors import ConfigError
 from .fleet_states import load_fleet_states, validate_fleet_states
-from .miner import AioBraiinsClient, MinerConfig
+from .miner import AioBraiinsClient, MinerConfig, parse_power_constraints
+from .miner_list import build_miner, recompute_priorities
 from .models import ControlConfig
 
-_ENTITY_SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+_SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+_CONTROL_KEYS = list(ControlConfig.model_fields.keys())
 
 
-def _user_schema(defaults: dict) -> vol.Schema:
-    fields: dict = {}
-    for spec in DEFAULT_MINERS:
-        mid = spec["id"]
-        fields[vol.Required(f"{mid}_ip", default=defaults.get(f"{mid}_ip", ""))] = str
-        fields[vol.Required(f"{mid}_password", default="")] = str
-    fields[vol.Required(CONF_GRID_ENTITY, default=defaults.get(CONF_GRID_ENTITY))] = _ENTITY_SENSOR
-    fields[vol.Optional(CONF_PV_ENTITY, default=defaults.get(CONF_PV_ENTITY, ""))] = str
-    fields[vol.Optional(CONF_BATTERY_ENTITY, default=defaults.get(CONF_BATTERY_ENTITY, ""))] = str
-    fields[vol.Required(CONF_IMPORT_POSITIVE, default=defaults.get(CONF_IMPORT_POSITIVE, True))] = bool
-    fields[vol.Required(CONF_FLEET_STATES_PATH, default=defaults.get(CONF_FLEET_STATES_PATH, ""))] = str
-    return vol.Schema(fields)
+def _hub_schema(d: dict) -> vol.Schema:
+    return vol.Schema({
+        vol.Required(CONF_GRID_ENTITY, default=d.get(CONF_GRID_ENTITY)): _SENSOR,
+        vol.Required(CONF_IMPORT_POSITIVE, default=d.get(CONF_IMPORT_POSITIVE, True)): bool,
+        vol.Optional(CONF_PV_ENTITY, default=d.get(CONF_PV_ENTITY) or ""): str,
+        vol.Optional(CONF_BATTERY_ENTITY, default=d.get(CONF_BATTERY_ENTITY) or ""): str,
+        vol.Optional(CONF_FLEET_STATES_PATH, default=d.get(CONF_FLEET_STATES_PATH) or ""): str,
+    })
+
+
+def _basics_schema(d: dict) -> vol.Schema:
+    return vol.Schema({
+        vol.Required("name", default=d.get("name", "")): str,
+        vol.Required("ip", default=d.get("ip", "")): str,
+        vol.Required("password", default=""): str,
+    })
+
+
+def _detail_schema(d: dict) -> vol.Schema:
+    return vol.Schema({
+        vol.Required("model", default=d.get("model", "")): str,
+        vol.Required("min_power_w", default=int(d.get("min_power_w", 0) or 0)): int,
+        vol.Required("max_power_w", default=int(d.get("max_power_w", 0) or 0)): int,
+        vol.Required("default_power_w", default=int(d.get("default_power_w", 0) or 0)): int,
+    })
+
+
+def _tuning_schema(opts: dict) -> vol.Schema:
+    cur = {**ControlConfig().model_dump(), **{k: opts[k] for k in _CONTROL_KEYS if k in opts}}
+    return vol.Schema({
+        vol.Required(k, default=cur[k]): (bool if isinstance(cur[k], bool) else (int if isinstance(cur[k], int) else float))
+        for k in _CONTROL_KEYS
+    })
+
+
+async def _detect(hass, name: str, ip: str, password: str) -> dict:
+    """Best-effort auto-detect of model + power range. Returns detail-form defaults;
+    leaves zeros/blanks on any failure so the user fills them in manually."""
+    out = {"name": name, "model": "", "min_power_w": 0, "max_power_w": 0, "default_power_w": 0}
+    session = async_get_clientsession(hass)
+    cfg = MinerConfig(id="probe", model="", ip=ip, priority=1, min_power_w=0, max_power_w=100000)
+    client = AioBraiinsClient(cfg, password, session)
+    try:
+        await client.login()
+        details = await client.get_miner_details()
+        out["model"] = details.get("platform") or details.get("miner_identity") or ""
+        rng = parse_power_constraints(await client.get_constraints())
+        if rng:
+            out["min_power_w"], out["max_power_w"], _ = rng
+        cur = (await client.get_tuner_state()).power_target_w
+        if cur:
+            out["default_power_w"] = int(cur)
+        if not out["default_power_w"] and out["max_power_w"]:
+            out["default_power_w"] = (out["min_power_w"] + out["max_power_w"]) // 2
+    except Exception:  # noqa: BLE001 - detection is best-effort; manual entry on failure
+        pass
+    return out
 
 
 class PvSurplusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 1   # bumped to 2 in Task 6, together with async_migrate_entry
+
+    def __init__(self) -> None:
+        self._hub: dict = {}
+        self._basics: dict = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        errors: dict[str, str] = {}
-        default_path = self.hass.config.path(DOMAIN, DEFAULT_FLEET_STATES_FILENAME)
-
         if user_input is not None:
-            miners = []
-            for spec in DEFAULT_MINERS:
-                mid = spec["id"]
-                miners.append({**spec, "ip": user_input[f"{mid}_ip"], "password": user_input[f"{mid}_password"]})
+            self._hub = {
+                CONF_GRID_ENTITY: user_input[CONF_GRID_ENTITY],
+                CONF_IMPORT_POSITIVE: user_input[CONF_IMPORT_POSITIVE],
+                CONF_PV_ENTITY: user_input.get(CONF_PV_ENTITY) or None,
+                CONF_BATTERY_ENTITY: user_input.get(CONF_BATTERY_ENTITY) or None,
+                CONF_FLEET_STATES_PATH: user_input.get(CONF_FLEET_STATES_PATH) or "",
+            }
+            self._basics = {"name": user_input["name"], "ip": user_input["ip"], "password": user_input["password"]}
+            return await self.async_step_miner_detail()
+        schema = _hub_schema({}).extend(dict(_basics_schema({}).schema))
+        return self.async_show_form(step_id="user", data_schema=schema)
 
-            # validate fleet-states file
-            try:
-                states = load_fleet_states(user_input[CONF_FLEET_STATES_PATH])
-                validate_fleet_states(states, {m["id"] for m in miners})
-            except ConfigError:
-                errors["base"] = "bad_fleet_states"
-
-            # best-effort connectivity check (one login per miner)
-            if not errors:
-                session = async_get_clientsession(self.hass)
-                for m in miners:
-                    cfg = MinerConfig(id=m["id"], model=m["model"], ip=m["ip"], priority=m["priority"],
-                                      min_power_w=m["min_power_w"], max_power_w=m["max_power_w"],
-                                      username=m["username"])
-                    try:
-                        await AioBraiinsClient(cfg, m["password"], session).login()
-                    except Exception:  # noqa: BLE001 - any network error blocks setup
-                        errors["base"] = "cannot_connect"
-                        break
-
-            if not errors:
-                await self.async_set_unique_id(DOMAIN)
-                self._abort_if_unique_id_configured()
-                data = {
-                    CONF_MINERS: miners,
-                    CONF_GRID_ENTITY: user_input[CONF_GRID_ENTITY],
-                    CONF_PV_ENTITY: user_input.get(CONF_PV_ENTITY) or None,
-                    CONF_BATTERY_ENTITY: user_input.get(CONF_BATTERY_ENTITY) or None,
-                    CONF_IMPORT_POSITIVE: user_input[CONF_IMPORT_POSITIVE],
-                    CONF_FLEET_STATES_PATH: user_input[CONF_FLEET_STATES_PATH],
-                }
-                return self.async_create_entry(title="PV-Surplus Mining", data=data, options={})
-
-        defaults = user_input or {CONF_FLEET_STATES_PATH: default_path, CONF_IMPORT_POSITIVE: True}
-        return self.async_show_form(step_id="user", data_schema=_user_schema(defaults), errors=errors)
+    async def async_step_miner_detail(self, user_input: dict[str, Any] | None = None):
+        if user_input is None:
+            d = await _detect(self.hass, self._basics["name"], self._basics["ip"], self._basics["password"])
+            return self.async_show_form(step_id="miner_detail", data_schema=_detail_schema(d))
+        miner = build_miner(self._basics["name"], self._basics["ip"], self._basics["password"],
+                            user_input["model"], user_input["min_power_w"], user_input["max_power_w"],
+                            user_input["default_power_w"], taken_ids=set())
+        miners = recompute_priorities([miner])
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+        options = {**self._hub, CONF_MINERS: miners, **ControlConfig().model_dump()}
+        return self.async_create_entry(title="PV-Surplus Mining", data={}, options=options)
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        return PvSurplusOptionsFlow(config_entry)
-
-
-_OPTION_KEYS = list(ControlConfig.model_fields.keys())
+        return PvSurplusOptionsFlow()
 
 
 class PvSurplusOptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
+    def __init__(self) -> None:
+        self._basics: dict = {}
+        self._edit_id: str | None = None
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None):
+    def _config(self) -> dict:
+        return {**self.config_entry.data, **(self.config_entry.options or {})}
+
+    def _miners(self) -> list[dict]:
+        return [dict(m) for m in self._config().get(CONF_MINERS, [])]
+
+    async def _save(self, updates: dict):
+        cfg = self._config()
+        cfg.update(updates)
+        return self.async_create_entry(title="", data=cfg)
+
+    async def async_step_init(self, user_input=None):
+        return self.async_show_menu(step_id="init",
+            menu_options=["add_miner", "edit_miner", "remove_miner", "hub", "tuning"])
+
+    async def async_step_add_miner(self, user_input=None):
+        if user_input is None:
+            return self.async_show_form(step_id="add_miner", data_schema=_basics_schema({}))
+        self._basics = {"name": user_input["name"], "ip": user_input["ip"], "password": user_input["password"]}
+        return await self.async_step_add_detail()
+
+    async def async_step_add_detail(self, user_input=None):
+        if user_input is None:
+            d = await _detect(self.hass, self._basics["name"], self._basics["ip"], self._basics["password"])
+            return self.async_show_form(step_id="add_detail", data_schema=_detail_schema(d))
+        miners = self._miners()
+        new = build_miner(self._basics["name"], self._basics["ip"], self._basics["password"],
+                          user_input["model"], user_input["min_power_w"], user_input["max_power_w"],
+                          user_input["default_power_w"], taken_ids={m["id"] for m in miners})
+        miners.append(new)
+        return await self._save({CONF_MINERS: recompute_priorities(miners)})
+
+    async def async_step_edit_miner(self, user_input=None):
+        ids = [m["id"] for m in self._miners()]
+        if user_input is None:
+            return self.async_show_form(step_id="edit_miner",
+                data_schema=vol.Schema({vol.Required("miner"): vol.In(ids)}))
+        self._edit_id = user_input["miner"]
+        return await self.async_step_edit_detail()
+
+    async def async_step_edit_detail(self, user_input=None):
+        miners = self._miners()
+        m = next(x for x in miners if x["id"] == self._edit_id)
+        if user_input is None:
+            return self.async_show_form(step_id="edit_detail", data_schema=_detail_schema(m))
+        m.update(model=user_input["model"], min_power_w=user_input["min_power_w"],
+                 max_power_w=user_input["max_power_w"], default_power_w=user_input["default_power_w"])
+        return await self._save({CONF_MINERS: recompute_priorities(miners)})
+
+    async def async_step_remove_miner(self, user_input=None):
+        ids = [m["id"] for m in self._miners()]
+        if user_input is None:
+            return self.async_show_form(step_id="remove_miner",
+                data_schema=vol.Schema({vol.Required("miner"): vol.In(ids)}))
+        miners = [m for m in self._miners() if m["id"] != user_input["miner"]]
+        return await self._save({CONF_MINERS: recompute_priorities(miners)})
+
+    async def async_step_hub(self, user_input=None):
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-        current = {**ControlConfig().model_dump(), **(self.config_entry.options or {})}
-        schema = vol.Schema({
-            vol.Required(k, default=current[k]): (bool if isinstance(current[k], bool)
-                                                  else (int if isinstance(current[k], int) else float))
-            for k in _OPTION_KEYS
-        })
-        return self.async_show_form(step_id="init", data_schema=schema)
+            path = user_input.get(CONF_FLEET_STATES_PATH) or ""
+            if path:
+                try:
+                    validate_fleet_states(load_fleet_states(path), {m["id"] for m in self._miners()})
+                except ConfigError:
+                    errors["base"] = "bad_fleet_states"
+            if not errors:
+                return await self._save({
+                    CONF_GRID_ENTITY: user_input[CONF_GRID_ENTITY],
+                    CONF_IMPORT_POSITIVE: user_input[CONF_IMPORT_POSITIVE],
+                    CONF_PV_ENTITY: user_input.get(CONF_PV_ENTITY) or None,
+                    CONF_BATTERY_ENTITY: user_input.get(CONF_BATTERY_ENTITY) or None,
+                    CONF_FLEET_STATES_PATH: path,
+                })
+        return self.async_show_form(step_id="hub", data_schema=_hub_schema(self._config()), errors=errors)
+
+    async def async_step_tuning(self, user_input=None):
+        if user_input is not None:
+            return await self._save(user_input)
+        return self.async_show_form(step_id="tuning", data_schema=_tuning_schema(self.config_entry.options or {}))

@@ -2,25 +2,32 @@
   "config": {
     "step": {
       "user": {
-        "title": "PV-Surplus Mining",
-        "description": "Enter each miner's IP and password, choose your grid/PV sensors, and point to the fleet-states file.",
+        "title": "PV-Surplus Mining – Setup",
+        "description": "Enter hub sensor settings and the first miner's connection details.",
         "data": {
-          "s21plus_01_ip": "S21+ IP address",
-          "s21plus_01_password": "S21+ password",
-          "s19jproplus_01_ip": "S19j Pro+ IP address",
-          "s19jproplus_01_password": "S19j Pro+ password",
-          "s19jpro_01_ip": "S19j Pro IP address",
-          "s19jpro_01_password": "S19j Pro password",
           "grid_entity": "Grid power sensor",
+          "grid_import_positive": "Grid sensor reports import as positive",
           "pv_entity": "Inverter PV sensor (optional)",
           "battery_entity": "Battery SOC sensor (optional)",
-          "grid_import_positive": "Grid sensor reports import as positive",
-          "fleet_states_path": "Path to fleet-states.yaml"
+          "fleet_states_path": "Path to fleet-states.yaml (optional)",
+          "name": "Miner name",
+          "ip": "Miner IP address",
+          "password": "Miner password"
+        }
+      },
+      "miner_detail": {
+        "title": "Miner details",
+        "description": "Confirm auto-detected values or fill in manually.",
+        "data": {
+          "model": "Model",
+          "min_power_w": "Minimum power (W)",
+          "max_power_w": "Maximum power (W)",
+          "default_power_w": "Default power target (W)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Could not reach/authenticate with one or more miners.",
+      "cannot_connect": "Could not reach/authenticate with the miner.",
       "bad_fleet_states": "The fleet-states file is missing, invalid, or does not match the configured miners."
     },
     "abort": {
@@ -30,9 +37,87 @@
   "options": {
     "step": {
       "init": {
+        "title": "PV-Surplus Mining",
+        "menu_options": {
+          "add_miner": "Add a miner",
+          "edit_miner": "Edit a miner",
+          "remove_miner": "Remove a miner",
+          "hub": "Hub / sensor settings",
+          "tuning": "Control tuning"
+        }
+      },
+      "add_miner": {
+        "title": "Add miner – connection",
+        "data": {
+          "name": "Miner name",
+          "ip": "Miner IP address",
+          "password": "Miner password"
+        }
+      },
+      "add_detail": {
+        "title": "Add miner – details",
+        "description": "Confirm auto-detected values or fill in manually.",
+        "data": {
+          "model": "Model",
+          "min_power_w": "Minimum power (W)",
+          "max_power_w": "Maximum power (W)",
+          "default_power_w": "Default power target (W)"
+        }
+      },
+      "edit_miner": {
+        "title": "Edit miner – select",
+        "data": {
+          "miner": "Miner"
+        }
+      },
+      "edit_detail": {
+        "title": "Edit miner – details",
+        "data": {
+          "model": "Model",
+          "min_power_w": "Minimum power (W)",
+          "max_power_w": "Maximum power (W)",
+          "default_power_w": "Default power target (W)"
+        }
+      },
+      "remove_miner": {
+        "title": "Remove miner",
+        "data": {
+          "miner": "Miner to remove"
+        }
+      },
+      "hub": {
+        "title": "Hub / sensor settings",
+        "data": {
+          "grid_entity": "Grid power sensor",
+          "grid_import_positive": "Grid sensor reports import as positive",
+          "pv_entity": "Inverter PV sensor (optional)",
+          "battery_entity": "Battery SOC sensor (optional)",
+          "fleet_states_path": "Path to fleet-states.yaml (optional)"
+        }
+      },
+      "tuning": {
         "title": "Control tuning",
-        "description": "Thresholds and durations for the control loop (mirrors control.yaml)."
+        "description": "Thresholds and durations for the control loop (mirrors control.yaml).",
+        "data": {
+          "enabled_default": "Enable control loop by default",
+          "loop_interval_s": "Loop interval (s)",
+          "export_reserve_w": "Export reserve (W)",
+          "step_up_export_threshold_w": "Step-up export threshold (W)",
+          "step_up_required_duration_s": "Step-up required duration (s)",
+          "step_down_import_threshold_w": "Step-down import threshold (W)",
+          "step_down_required_duration_s": "Step-down required duration (s)",
+          "emergency_import_threshold_w": "Emergency import threshold (W)",
+          "emergency_required_duration_s": "Emergency required duration (s)",
+          "min_state_dwell_s": "Minimum state dwell time (s)",
+          "fallback_state": "Fallback state index",
+          "max_state": "Maximum state index",
+          "avg_window_s": "Averaging window (s)"
+        }
       }
+    },
+    "error": {
+      "cannot_connect": "Could not reach/authenticate with the miner.",
+      "bad_fleet_states": "The fleet-states file is missing, invalid, or does not match the configured miners."
     }
   }
 }

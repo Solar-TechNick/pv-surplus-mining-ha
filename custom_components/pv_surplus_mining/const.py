@@ -25,12 +25,3 @@ OPT_FALLBACK_STATE = "fallback_state"
 OPT_MAX_STATE = "max_state"
 
 DEFAULT_FLEET_STATES_FILENAME = "fleet-states.yaml"
-
-DEFAULT_MINERS = [
-    {"id": "s19jproplus_01", "model": "Antminer S19j Pro+", "priority": 1, "min_power_w": 817, "max_power_w": 6435,
-     "power_targets_w": {"normal": 3300}, "command_cooldown_sec": 180, "username": "root"},
-    {"id": "s19jpro_01", "model": "Antminer S19j Pro", "priority": 2, "min_power_w": 944, "max_power_w": 6435,
-     "power_targets_w": {"normal": 3068}, "command_cooldown_sec": 180, "username": "root"},
-    {"id": "s21plus_01", "model": "Antminer S21+", "priority": 3, "min_power_w": 2457, "max_power_w": 6435,
-     "power_targets_w": {"normal": 3878}, "command_cooldown_sec": 120, "username": "root"},
-]
