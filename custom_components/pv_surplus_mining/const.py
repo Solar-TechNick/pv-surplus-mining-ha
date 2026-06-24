@@ -1,7 +1,6 @@
 DOMAIN = "pv_surplus_mining"
 
-# Filled in Task 7 once entity platforms exist.
-PLATFORMS: list[str] = []
+PLATFORMS: list[str] = ["sensor", "switch", "number"]
 
 # Config-entry data keys
 CONF_MINERS = "miners"            # list[dict]: {id, model, ip, priority, username, password, min_power_w, max_power_w}
