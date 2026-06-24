@@ -101,3 +101,40 @@ async def test_normal_mode_emergency_stop_takes_precedence(hass):
     hass.states.async_set("sensor.grid_power", "-200")
     data = await c._async_update_data()
     assert data["emergency"] is True and data["target_state"] == 0
+
+
+async def test_build_coordinator_generates_matrix_from_options(hass):
+    from custom_components.pv_surplus_mining.coordinator import async_build_coordinator
+    from custom_components.pv_surplus_mining.const import DOMAIN
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={
+        "grid_entity": "sensor.grid", "grid_import_positive": True,
+        "miners": [
+            {"id": "a", "name": "A", "model": "m", "ip": "10.0.0.1", "password": "pw", "username": "root",
+             "min_power_w": 800, "max_power_w": 6435, "default_power_w": 3000, "command_cooldown_sec": 120, "priority": 1},
+            {"id": "b", "name": "B", "model": "m", "ip": "10.0.0.2", "password": "pw", "username": "root",
+             "min_power_w": 2400, "max_power_w": 6435, "default_power_w": 3800, "command_cooldown_sec": 120, "priority": 2},
+        ],
+    })
+    entry.add_to_hass(hass)
+    coordinator = await async_build_coordinator(hass, entry)   # no network at build time
+    assert set(coordinator.fleet.miners) == {"a", "b"}
+    assert 0 in coordinator.fleet.states and coordinator.fleet.max_state >= 1
+    assert all(t.action == "sleep" for t in coordinator.fleet.states[0].values())
+
+
+async def test_build_coordinator_uses_custom_file_override(hass, tmp_path):
+    from custom_components.pv_surplus_mining.coordinator import async_build_coordinator
+    from custom_components.pv_surplus_mining.const import DOMAIN
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    f = tmp_path / "fleet-states.yaml"
+    f.write_text("states:\n  0:\n    a: { action: sleep }\n  1:\n    a: { action: active, power_w: 1000 }\n")
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={
+        "grid_entity": "sensor.grid", "grid_import_positive": True, "fleet_states_path": str(f),
+        "miners": [{"id": "a", "name": "A", "model": "m", "ip": "10.0.0.1", "password": "pw", "username": "root",
+                    "min_power_w": 800, "max_power_w": 6435, "default_power_w": 3000, "command_cooldown_sec": 120, "priority": 1}],
+    })
+    entry.add_to_hass(hass)
+    coordinator = await async_build_coordinator(hass, entry)
+    assert sorted(coordinator.fleet.states) == [0, 1]
+    assert coordinator.fleet.states[1]["a"].power_w == 1000

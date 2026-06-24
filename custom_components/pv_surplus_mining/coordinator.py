@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -16,7 +17,7 @@ from .const import (
 from .control.loop import ControlInputs, ControllerLoop
 from .errors import AdapterError
 from .fleet import FleetController
-from .fleet_states import load_fleet_states, validate_fleet_states
+from .fleet_states import generate_fleet_states, load_fleet_states, validate_fleet_states
 from .miner import AioBraiinsClient, MinerConfig, MinerController
 from .models import ControlConfig
 
@@ -122,29 +123,39 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
 
 async def async_build_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> PvSurplusCoordinator:
     session = async_get_clientsession(hass)
-    data = entry.data
+    cfg = {**entry.data, **(entry.options or {})}
+    control_kwargs = {k: cfg[k] for k in ControlConfig.model_fields if k in cfg}
+    control = ControlConfig(**control_kwargs)
+
+    def _default_w(m: dict) -> int:
+        return int(m.get("default_power_w") or (m.get("power_targets_w") or {}).get("normal") or m["max_power_w"])
+
     miners: dict[str, MinerController] = {}
-    for m in data[CONF_MINERS]:
-        cfg = MinerConfig(
-            id=m["id"], model=m["model"], ip=m["ip"], priority=m["priority"],
+    for m in cfg[CONF_MINERS]:
+        mc = MinerConfig(
+            id=m["id"], model=m.get("model", m["id"]), ip=m["ip"], priority=m.get("priority", 1),
             min_power_w=m["min_power_w"], max_power_w=m["max_power_w"],
-            power_targets_w=m.get("power_targets_w", {}),
+            power_targets_w={"normal": _default_w(m)},
             command_cooldown_sec=m.get("command_cooldown_sec", 120),
             username=m.get("username", "root"),
         )
-        client = AioBraiinsClient(cfg, m["password"], session)
-        miners[cfg.id] = MinerController(cfg, client)
+        miners[mc.id] = MinerController(mc, AioBraiinsClient(mc, m["password"], session))
 
-    states = load_fleet_states(data[CONF_FLEET_STATES_PATH])
+    path = cfg.get(CONF_FLEET_STATES_PATH) or ""
+    if path and Path(path).exists():
+        states = load_fleet_states(path)
+    else:
+        gen = [{"id": m["id"], "min_power_w": m["min_power_w"],
+                "default_power_w": _default_w(m), "priority": m.get("priority", 1)} for m in cfg[CONF_MINERS]]
+        states = generate_fleet_states(gen, control.step_up_export_threshold_w)
     validate_fleet_states(states, set(miners))
     fleet = FleetController(miners, states)
 
-    config = ControlConfig(**(entry.options or {}))
     coordinator = PvSurplusCoordinator(
-        hass, config, fleet,
-        grid_entity=data[CONF_GRID_ENTITY],
-        import_positive=data.get(CONF_IMPORT_POSITIVE, True),
-        pv_entity=data.get(CONF_PV_ENTITY),
+        hass, control, fleet,
+        grid_entity=cfg[CONF_GRID_ENTITY],
+        import_positive=cfg.get(CONF_IMPORT_POSITIVE, True),
+        pv_entity=cfg.get(CONF_PV_ENTITY),
     )
-    coordinator.config_entry = entry   # explicit (version-independent) — entity.py needs entry_id
+    coordinator.config_entry = entry
     return coordinator
