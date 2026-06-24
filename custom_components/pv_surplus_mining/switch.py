@@ -15,6 +15,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entitie
         _ControlSwitch(coordinator, "auto_enabled", "Automation enabled"),
         _ControlSwitch(coordinator, "emergency_stop", "Emergency stop"),
         _ControlSwitch(coordinator, "manual_override", "Manual override"),
+        _ControlSwitch(coordinator, "normal_mode", "Normal mode"),
     ])
 
 

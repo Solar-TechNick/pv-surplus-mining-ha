@@ -85,6 +85,12 @@ class AioBraiinsClient:
     async def set_power_target(self, watt: int) -> None:
         await self._request_json("PUT", "/performance/power-target", json={"watt": watt})
 
+    async def pause(self) -> None:
+        await self._request_json("PUT", "/actions/pause")
+
+    async def resume(self) -> None:
+        await self._request_json("PUT", "/actions/resume")
+
 
 class MinerController:
     """Idempotent, rate-limited, verified, mark-unavailable-after-N writer.
@@ -98,6 +104,7 @@ class MinerController:
         self._max_failures = max_failures
         self.available = True
         self.failure_count = 0
+        self.paused = False
         self._last_command_ts: float | None = None
 
     def _audit(self, payload: dict) -> None:
@@ -130,6 +137,48 @@ class MinerController:
         if self._clock() - self._last_command_ts < self.cfg.command_cooldown_sec:
             raise RateLimitedError(f"{self.cfg.id}: within command cooldown")
 
+    async def pause(self) -> CommandResult:
+        """Fully pause the miner (~0 W). Bypasses rate-limit; same mark-unavailable failure handling."""
+        if not self.available:
+            raise MinerUnavailableError(f"{self.cfg.id}: marked unavailable")
+        if self.paused:
+            self._audit({"miner": self.cfg.id, "action": "pause", "target_w": 0, "result": "skipped_idempotent"})
+            return CommandResult(miner_id=self.cfg.id, action="pause", target_w=0, changed=False, verified=True, result="skipped_idempotent")
+        try:
+            await self.client.pause()
+        except AdapterError as exc:
+            self.failure_count += 1
+            if self.failure_count >= self._max_failures:
+                self.available = False
+            self._audit({"miner": self.cfg.id, "action": "pause", "target_w": 0, "result": "error", "error": str(exc), "failures": self.failure_count})
+            raise
+        self.paused = True
+        # Lenient verify: if the read fails or status is unrecognised, verified=False but never raise.
+        verified = False
+        try:
+            details = await self.client.get_miner_details()
+            paused_statuses = {"paused", "suspended", "stopped", "not_started"}
+            verified = str(details.get("status", "")).lower() in paused_statuses
+        except Exception:  # noqa: BLE001
+            pass
+        self._audit({"miner": self.cfg.id, "action": "pause", "target_w": 0, "result": "ok", "verified": verified})
+        return CommandResult(miner_id=self.cfg.id, action="pause", target_w=0, changed=True, verified=verified, result="ok")
+
+    async def resume(self) -> None:
+        """Resume a paused miner. Idempotent if not paused."""
+        if not self.paused:
+            return
+        try:
+            await self.client.resume()
+        except AdapterError as exc:
+            self.failure_count += 1
+            if self.failure_count >= self._max_failures:
+                self.available = False
+            self._audit({"miner": self.cfg.id, "action": "resume", "result": "error", "error": str(exc), "failures": self.failure_count})
+            raise
+        self.paused = False
+        self._audit({"miner": self.cfg.id, "action": "resume", "result": "ok"})
+
     async def set_power_target(self, watt: int, *, force: bool = False,
                                audit_action: str | None = None) -> CommandResult:
         action = audit_action or "set_power_target"
@@ -139,6 +188,11 @@ class MinerController:
             raise OutOfRangeError(
                 f"{self.cfg.id}: {watt}W outside [{self.cfg.min_power_w},{self.cfg.max_power_w}]"
             )
+
+        # Auto-resume a paused miner before sending a power target (a power target
+        # on a paused miner is meaningless).
+        if self.paused:
+            await self.resume()
 
         current = await self.client.get_tuner_state()
         if current.power_target_w == watt:
@@ -164,9 +218,11 @@ class MinerController:
 
     async def curtail(self, action: Literal["sleep", "wakeup"], wake_target_w: int | None = None) -> CommandResult:
         if action == "sleep":
-            target = self.cfg.min_power_w
-        elif wake_target_w is not None:
-            target = wake_target_w
+            return await self.pause()
         else:
-            target = self.cfg.power_targets_w.get("normal") or self.cfg.min_power_w
-        return await self.set_power_target(int(target), force=(action == "sleep"), audit_action=f"curtail:{action}")
+            # wakeup: set_power_target auto-resumes a paused miner
+            if wake_target_w is not None:
+                target = wake_target_w
+            else:
+                target = self.cfg.power_targets_w.get("normal") or self.cfg.min_power_w
+            return await self.set_power_target(int(target), audit_action="curtail:wakeup")

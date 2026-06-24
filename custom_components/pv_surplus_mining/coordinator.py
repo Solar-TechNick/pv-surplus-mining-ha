@@ -44,6 +44,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         self.manual_override = False
         self.manual_state = 0
         self.max_state = config.max_state
+        self.normal_mode = False
 
     def _read_grid(self) -> float | None:
         from .normalize import normalize_grid_power
@@ -88,12 +89,13 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # in miner.py), rather than using the vendored core's whole-fleet emergency-to-zero,
         # which would over-react. Sustained-grid-loss escalation is a possible future
         # enhancement when `telemetry_stale` could be wired to a consecutive-None counter.
+        normal = self.normal_mode and not self.emergency_stop
         inputs = ControlInputs(
-            auto_enabled=self.auto_enabled,
+            auto_enabled=(self.auto_enabled or normal),
             emergency_stop=self.emergency_stop,
-            manual_override=self.manual_override,
-            manual_state=self.manual_state,
-            max_state=self.max_state,
+            manual_override=(self.manual_override or normal),
+            manual_state=(self.fleet.max_state if normal else self.manual_state),
+            max_state=(self.fleet.max_state if normal else self.max_state),
             all_required_online=(available_ids == set(self.fleet.miners)),
             any_over_temp_warning=any_warn,
             any_over_temp_critical=any_crit,

@@ -31,6 +31,8 @@ def _mock_miner(m):
     m.get(f"{base}/miner/stats", payload={"power": {"approx": 1400}, "temp_max_c": 60}, repeat=True)
     m.get(f"{base}/performance/tuner-state", payload={"power_target": {"watt": 1400}}, repeat=True)
     m.put(f"{base}/performance/power-target", payload={}, repeat=True)
+    m.put(f"{base}/actions/pause", payload=True, repeat=True)
+    m.put(f"{base}/actions/resume", payload=True, repeat=True)
 
 
 async def test_entities_created_and_switch_writes_back(hass, tmp_path):
@@ -61,3 +63,36 @@ async def test_entities_created_and_switch_writes_back(hass, tmp_path):
             {"entity_id": switch_entity_id}, blocking=True,
         )
     assert coordinator.auto_enabled is True
+
+
+async def test_normal_mode_switch_toggles_coordinator(hass, tmp_path):
+    """Toggling the normal_mode switch flips coordinator.normal_mode."""
+    fleet_file = tmp_path / "fleet-states.yaml"; fleet_file.write_text(FLEET_YAML)
+    hass.states.async_set("sensor.grid_power", "100")
+    entry = MockConfigEntry(domain=DOMAIN, data=_entry_data(fleet_file), title="PV-Surplus Mining")
+    entry.add_to_hass(hass)
+    with aioresponses() as m:
+        _mock_miner(m)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        assert coordinator.normal_mode is False
+
+        # Find the normal_mode switch
+        all_switches = [s.entity_id for s in hass.states.async_all("switch")]
+        matches = [eid for eid in all_switches if "normal" in eid]
+        assert matches, f"No normal_mode switch found; registered switches: {all_switches}"
+        switch_entity_id = matches[0]
+
+        await hass.services.async_call(
+            "switch", "turn_on",
+            {"entity_id": switch_entity_id}, blocking=True,
+        )
+        assert coordinator.normal_mode is True
+
+        await hass.services.async_call(
+            "switch", "turn_off",
+            {"entity_id": switch_entity_id}, blocking=True,
+        )
+        assert coordinator.normal_mode is False

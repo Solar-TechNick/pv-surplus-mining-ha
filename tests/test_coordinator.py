@@ -76,3 +76,28 @@ async def test_recovery_clears_unavailable_latch(hass):
     assert a.failure_count == 0
     # max_available_state should now reflect the re-admitted miner (state 1 is reachable)
     assert data["max_available_state"] == 1
+
+
+# ── Normal-mode tests ─────────────────────────────────────────────────────────
+
+async def test_normal_mode_targets_top_state(hass):
+    """With normal_mode=True and a grid value that would otherwise hold (mild export),
+    the decision should target the top reachable state (fleet.max_state = 1)."""
+    c, a = _coord(hass)
+    c.normal_mode = True
+    # Mild export that would normally hold at 0 (below step-up threshold)
+    hass.states.async_set("sensor.grid_power", "-200")
+    data = await c._async_update_data()
+    # Normal mode forces manual_override to max_state (1); decision should target 1
+    assert data["target_state"] == 1
+
+
+async def test_normal_mode_emergency_stop_takes_precedence(hass):
+    """With normal_mode=True AND emergency_stop=True, emergency wins and state goes to 0."""
+    c, a = _coord(hass)
+    c.normal_mode = True
+    c.emergency_stop = True
+    c.loop.current_state = 1   # pretend fleet is running
+    hass.states.async_set("sensor.grid_power", "-200")
+    data = await c._async_update_data()
+    assert data["emergency"] is True and data["target_state"] == 0

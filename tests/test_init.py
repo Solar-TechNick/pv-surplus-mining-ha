@@ -36,6 +36,8 @@ def _mock_miner(m):
     m.get(f"{base}/miner/stats", payload={"power": {"approx": 1400}, "temp_max_c": 60}, repeat=True)
     m.get(f"{base}/performance/tuner-state", payload={"power_target": {"watt": 1400}}, repeat=True)
     m.put(f"{base}/performance/power-target", payload={}, repeat=True)
+    m.put(f"{base}/actions/pause", payload=True, repeat=True)
+    m.put(f"{base}/actions/resume", payload=True, repeat=True)
 
 
 async def test_setup_and_unload_entry(hass, tmp_path):
