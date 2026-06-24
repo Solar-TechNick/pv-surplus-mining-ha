@@ -27,7 +27,6 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach/authenticate with the miner.",
       "bad_fleet_states": "The fleet-states file is missing, invalid, or does not match the configured miners."
     },
     "abort": {
@@ -74,6 +73,8 @@
         "title": "Edit miner – details",
         "data": {
           "model": "Model",
+          "ip": "Miner IP address",
+          "password": "New password (leave blank to keep existing)",
           "min_power_w": "Minimum power (W)",
           "max_power_w": "Maximum power (W)",
           "default_power_w": "Default power target (W)"
@@ -116,7 +117,6 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach/authenticate with the miner.",
       "bad_fleet_states": "The fleet-states file is missing, invalid, or does not match the configured miners."
     }
   }

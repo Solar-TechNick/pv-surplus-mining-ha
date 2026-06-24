@@ -50,6 +50,18 @@ def _detail_schema(d: dict) -> vol.Schema:
     })
 
 
+def _edit_schema(m: dict) -> vol.Schema:
+    """Schema for the edit-detail step: includes ip + password (blank = keep)."""
+    return vol.Schema({
+        vol.Required("model", default=m.get("model", "")): str,
+        vol.Required("ip", default=m.get("ip", "")): str,
+        vol.Optional("password", default=""): str,
+        vol.Required("min_power_w", default=int(m.get("min_power_w", 0) or 0)): int,
+        vol.Required("max_power_w", default=int(m.get("max_power_w", 0) or 0)): int,
+        vol.Required("default_power_w", default=int(m.get("default_power_w", 0) or 0)): int,
+    })
+
+
 def _tuning_schema(opts: dict) -> vol.Schema:
     cur = {**ControlConfig().model_dump(), **{k: opts[k] for k in _CONTROL_KEYS if k in opts}}
     return vol.Schema({
@@ -171,9 +183,13 @@ class PvSurplusOptionsFlow(config_entries.OptionsFlow):
         miners = self._miners()
         m = next(x for x in miners if x["id"] == self._edit_id)
         if user_input is None:
-            return self.async_show_form(step_id="edit_detail", data_schema=_detail_schema(m))
-        m.update(model=user_input["model"], min_power_w=user_input["min_power_w"],
-                 max_power_w=user_input["max_power_w"], default_power_w=user_input["default_power_w"])
+            return self.async_show_form(step_id="edit_detail", data_schema=_edit_schema(m))
+        m.update(model=user_input["model"], ip=user_input["ip"],
+                 min_power_w=user_input["min_power_w"],
+                 max_power_w=user_input["max_power_w"],
+                 default_power_w=user_input["default_power_w"])
+        if user_input.get("password"):
+            m["password"] = user_input["password"]
         return await self._save({CONF_MINERS: recompute_priorities(miners)})
 
     async def async_step_remove_miner(self, user_input=None):
