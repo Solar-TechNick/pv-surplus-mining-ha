@@ -27,9 +27,13 @@ async def test_login_and_set_power_target_verifies():
     clock = FakeClock()
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 2000}})   # current
+        # current read: different watt → not idempotent, proceed with write
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 2000}}}})
         m.put(f"{BASE}/performance/power-target", payload={})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 3000}})   # verify
+        # verify read: target watt → verified=True
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 3000}}}})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session), clock=clock)
             res = await ctrl.set_power_target(3000)
@@ -39,7 +43,9 @@ async def test_login_and_set_power_target_verifies():
 async def test_idempotent_skip_when_already_at_target():
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 3000}})
+        # current read reports the same watt as requested → idempotent skip
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 3000}}}})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session))
             res = await ctrl.set_power_target(3000)
@@ -57,10 +63,14 @@ async def test_rate_limited_within_cooldown():
     clock = FakeClock()
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 2000}})
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 2000}}}})
         m.put(f"{BASE}/performance/power-target", payload={})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 3000}})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 1500}})  # 2nd call current (!=2000 so idempotent skip is bypassed)
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 3000}}}})
+        # 2nd call current: !=2000 so idempotent skip is bypassed; but rate limit fires first
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 1500}}}})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session), clock=clock)
             await ctrl.set_power_target(3000)        # sets _last_command_ts
@@ -74,7 +84,8 @@ async def test_marked_unavailable_after_repeated_failures():
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
         # 3 failed writes: each does current-read (200) then PUT (500)
         for _ in range(3):
-            m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 2000}})
+            m.get(f"{BASE}/performance/tuner-state",
+                  payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 2000}}}})
             m.put(f"{BASE}/performance/power-target", status=500)
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session), max_failures=3)
@@ -93,8 +104,9 @@ async def test_pause_sets_paused_and_verifies():
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
         m.put(f"{BASE}/actions/pause", payload=True)
-        # verify: get_miner_details returns "paused" status
-        m.get(f"{BASE}/miner/details", payload={"status": "paused"})
+        # verify: status=3 (paused enum) → verified=True
+        m.get(f"{BASE}/miner/details",
+              payload={"miner_identity": {"miner_model": "Antminer S21+", "name": "s21plus_01"}, "status": 3})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session))
             res = await ctrl.pause()
@@ -133,7 +145,9 @@ async def test_curtail_sleep_calls_pause():
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
         m.put(f"{BASE}/actions/pause", payload=True)
-        m.get(f"{BASE}/miner/details", payload={"status": "paused"})
+        # status=3 (paused enum) → pause verify returns verified=True
+        m.get(f"{BASE}/miner/details",
+              payload={"miner_identity": {"miner_model": "Antminer S21+", "name": "s21plus_01"}, "status": 3})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session))
             res = await ctrl.curtail("sleep")
@@ -146,9 +160,13 @@ async def test_set_power_target_auto_resumes_paused_miner():
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
         m.put(f"{BASE}/actions/resume", payload=True)
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 2000}})
+        # current read: different watt → not idempotent
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 2000}}}})
         m.put(f"{BASE}/performance/power-target", payload={})
-        m.get(f"{BASE}/performance/tuner-state", payload={"power_target": {"watt": 3000}})
+        # verify read: target watt → verified=True
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 3000}}}})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session))
             ctrl.paused = True  # simulate paused state
@@ -180,7 +198,9 @@ async def test_pause_verify_lenient_on_unexpected_status():
     with aioresponses() as m:
         m.post(f"{BASE}/auth/login", payload={"token": "T"})
         m.put(f"{BASE}/actions/pause", payload=True)
-        m.get(f"{BASE}/miner/details", payload={"status": "running"})  # unexpected
+        # status=2 (normal/running) is not in (3, 4) → verified=False
+        m.get(f"{BASE}/miner/details",
+              payload={"miner_identity": {"miner_model": "Antminer S21+", "name": "s21plus_01"}, "status": 2})
         async with aiohttp.ClientSession() as session:
             ctrl = MinerController(CFG, await _client(session))
             res = await ctrl.pause()

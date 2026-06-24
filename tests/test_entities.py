@@ -27,9 +27,19 @@ def _entry_data(path):
 def _mock_miner(m):
     base = "http://10.0.0.5/api/v1"
     m.post(f"{base}/auth/login", payload={"token": "T"}, repeat=True)
-    m.get(f"{base}/miner/details", payload={"status": "online"}, repeat=True)
-    m.get(f"{base}/miner/stats", payload={"power": {"approx": 1400}, "temp_max_c": 60}, repeat=True)
-    m.get(f"{base}/performance/tuner-state", payload={"power_target": {"watt": 1400}}, repeat=True)
+    m.get(f"{base}/miner/details",
+          payload={"miner_identity": {"miner_model": "Antminer S21+", "name": "s21plus_01"}, "status": 2},
+          repeat=True)
+    m.get(f"{base}/miner/stats",
+          payload={"power_stats": {"approximated_consumption": {"watt": 1400}},
+                   "miner_stats": {"real_hashrate": {"last_1m": {"gigahash_per_second": 28477.6}}}},
+          repeat=True)
+    m.get(f"{base}/cooling/state",
+          payload={"highest_temperature": {"temperature": {"degree_c": 58.5}}},
+          repeat=True)
+    m.get(f"{base}/performance/tuner-state",
+          payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 1400}}}},
+          repeat=True)
     m.put(f"{base}/performance/power-target", payload={}, repeat=True)
     m.put(f"{base}/actions/pause", payload=True, repeat=True)
     m.put(f"{base}/actions/resume", payload=True, repeat=True)
