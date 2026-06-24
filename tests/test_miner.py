@@ -157,6 +157,24 @@ async def test_set_power_target_auto_resumes_paused_miner():
     assert res.changed is True and res.verified is True
 
 
+async def test_resume_failure_increments_and_marks_unavailable():
+    """A paused miner whose set_power_target triggers resume(), but /actions/resume
+    returns HTTP 500 repeatedly → failure_count increments and available=False at max_failures."""
+    with aioresponses() as m:
+        m.post(f"{BASE}/auth/login", payload={"token": "T"})
+        # Each set_power_target attempt: resume PUT fails (500), no further calls
+        for _ in range(3):
+            m.put(f"{BASE}/actions/resume", status=500)
+        async with aiohttp.ClientSession() as session:
+            ctrl = MinerController(CFG, await _client(session), max_failures=3)
+            ctrl.paused = True  # simulate already-paused miner
+            for _ in range(3):
+                with pytest.raises(Exception):
+                    await ctrl.set_power_target(3000, force=True)
+    assert ctrl.failure_count == 3
+    assert ctrl.available is False
+
+
 async def test_pause_verify_lenient_on_unexpected_status():
     """If the details status is not in the paused set, verified=False but no exception."""
     with aioresponses() as m:

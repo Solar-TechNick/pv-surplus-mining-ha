@@ -61,7 +61,7 @@ class FleetController:
         matched = None
         for sid, targets in self.states.items():
             if all(
-                (t.action == "sleep" or t.power_w is None) and miners_state.get(mid) in (None, self.miners[mid].cfg.min_power_w)
+                (t.action == "sleep" or t.power_w is None) and miners_state.get(mid) in (None, 0, self.miners[mid].cfg.min_power_w)
                 or (t.power_w is not None and miners_state.get(mid) == t.power_w)
                 for mid, t in targets.items()
             ):

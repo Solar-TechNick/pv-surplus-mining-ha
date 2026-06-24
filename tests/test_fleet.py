@@ -125,6 +125,20 @@ async def test_get_state_matches_correctly():
     result3 = await fc3.get_state()
     assert result3["matched_state"] is None
 
+    # all miners paused → tuner reports 0 → still matches state 0
+    a4 = _ctrl("a", 1, tuner_power_w=0)
+    b4 = _ctrl("b", 2, tuner_power_w=0)
+    fc4 = FleetController({"a": a4, "b": b4}, states)
+    result4 = await fc4.get_state()
+    assert result4["matched_state"] == 0
+
+    # all miners paused → tuner reports None → still matches state 0
+    a5 = _ctrl("a", 1, tuner_power_w=None)
+    b5 = _ctrl("b", 2, tuner_power_w=None)
+    fc5 = FleetController({"a": a5, "b": b5}, states)
+    result5 = await fc5.get_state()
+    assert result5["matched_state"] == 0
+
 
 def test_validate_fleet_states_rejects_extra_miner(tmp_path):
     """validate_fleet_states raises ConfigError when the YAML has more miners than the fleet."""
