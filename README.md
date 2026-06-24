@@ -1,44 +1,58 @@
 # PV-Surplus Mining — Home Assistant integration (all-in-one)
 
-A single Home Assistant custom integration that consumes excess solar power by
-modulating a small Antminer fleet (Braiins OS+) instead of exporting to the
-grid — **all inside Home Assistant**, with no Node-RED flow and no separate
-adapter service.
+Consume excess solar by modulating a Braiins OS+ Antminer fleet (S21+, S19j Pro+,
+S19j Pro) — entirely inside Home Assistant. No Node-RED, no separate adapter.
 
-This is the **all-in-one variant** of the PV-surplus mining controller. The
-original multi-component system (Home Assistant + Node-RED + a standalone
-Braiins adapter service) lives in a separate project (`sol-miner-vs`) and is
-left untouched. This project re-homes the same proven control logic into one
-native HA integration.
+## Install (HACS custom repository)
 
-## What it does
+1. HACS → ⋮ → **Custom repositories** → add `https://github.com/Solar-TechNick/pv-surplus-mining-ha`, category **Integration**.
+2. Install **PV-Surplus Mining**, then restart Home Assistant.
 
-On a fixed control interval the integration:
+## Configure
 
-1. reads your grid-power meter (and inverter PV / optional battery) from
-   existing HA entities,
-2. runs the deterministic decision loop (rolling average → sustained-condition
-   timers → dwell → fleet-state decision; merit order, asymmetric ramping,
-   safe-by-default),
-3. commands the miners directly over the Braiins REST API with idempotent,
-   rate-limited, verify-after-write, mark-unavailable-after-N-failures writes,
-4. exposes everything as native HA entities (current fleet state, per-miner
-   telemetry, and the operator controls: automation enable, emergency stop,
-   manual override, max state, export buffer).
+1. Create the fleet-states file the integration reads. Generate it with the
+   commissioning sweep from the companion `sol-miner-vs` project, or hand-write
+   it in the same format. Default location: `<config>/pv_surplus_mining/fleet-states.yaml`.
+   Example (states 0..N, each mapping every miner to `sleep` or an `active` watt target):
 
-## Status
+       states:
+         0:
+           s21plus_01: { action: sleep }
+           s19jproplus_01: { action: sleep }
+           s19jpro_01: { action: sleep }
+         1:
+           s21plus_01: { action: active, power_w: 2000 }
+           s19jproplus_01: { action: sleep }
+           s19jpro_01: { action: sleep }
 
-Design phase. The approved design lives in
-[`docs/superpowers/specs/`](docs/superpowers/specs/). Implementation has not
-started yet.
+2. Settings → Devices & Services → **Add Integration** → *PV-Surplus Mining*.
+   Enter each miner's IP + password, pick your **grid-power sensor** (and PV /
+   battery if you have them), set whether the grid sensor reports **import as
+   positive**, and confirm the fleet-states path.
+3. Tune the control loop later via the integration's **Configure** (options).
 
-## The fleet
+Miner passwords are stored in Home Assistant's encrypted `.storage` — never in
+a repository file.
 
-Antminer **S21+** (primary) → **S19j Pro+** (secondary) → **S19j Pro**
-(tertiary), all on Braiins OS+. Merit order is fixed most-efficient-first.
+## Entities
 
-## Credentials
+- Switches: **Automation enabled**, **Emergency stop**, **Manual override**
+- Numbers: **Manual state**, **Max state**
+- Sensors: **Fleet state**, **Target state**, **Max available state**,
+  **Grid power** (+import/−export, `unknown` when the source is invalid),
+  **Grid power (avg)**, and per-miner **power** / **temperature**
 
-Miner passwords are entered in the HA config flow and stored in Home
-Assistant's encrypted `.storage`. They are **never** written to a config file
-in this repository.
+## Safety
+
+- Grid sensor `unknown`/`unavailable` → the loop holds, never ramps up.
+- On HA restart the controller starts at state 0 and reads real miner state
+  before ramping.
+- Emergency stop (and sustained hard grid import) forces every miner to the
+  safe state immediately, bypassing dwell.
+- Every miner write is idempotent, rate-limited, verified by re-read, and a
+  miner is marked unavailable after repeated failures (the loop then refuses to
+  target any state that needs it).
+
+## Fleet & merit order
+
+Antminer **S21+** → **S19j Pro+** → **S19j Pro** (most-efficient first).
