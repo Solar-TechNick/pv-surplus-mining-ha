@@ -27,3 +27,6 @@ home-assistant.log*
 # Local secrets (must never be committed; HA stores creds in its encrypted .storage)
 secrets.yaml
 *.env
+
+# SDD scratch (briefs, reports, review diffs, progress ledger)
+.superpowers/
