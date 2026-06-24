@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aioresponses import aioresponses
 from homeassistant.data_entry_flow import FlowResultType
@@ -42,13 +42,24 @@ async def test_full_flow_creates_entry(hass, tmp_path):
     fleet = tmp_path / "fleet-states.yaml"; fleet.write_text(FLEET_YAML)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert result["type"] is FlowResultType.FORM
-    # Patch async_setup_entry so creating the entry does not auto-start the real
-    # integration (coordinator + client session) during this flow-only test —
-    # otherwise the HA harness flags a lingering shutdown thread in teardown.
-    with aioresponses() as m, patch(
+    # Fully isolate this flow-only test from real aiohttp and from entry setup:
+    # mock the connectivity check (client + shared session) so no HA client
+    # session is created (which otherwise leaves a lingering shutdown thread the
+    # HA harness fails on in teardown), and stub setup/unload so creating the
+    # entry doesn't auto-start the coordinator. The real login/setup paths are
+    # covered by test_cannot_connect_errors and test_init / test_entities.
+    mock_client = MagicMock()
+    mock_client.return_value.login = AsyncMock()
+    with patch(
+        "custom_components.pv_surplus_mining.config_flow.async_get_clientsession",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.pv_surplus_mining.config_flow.AioBraiinsClient", mock_client
+    ), patch(
         "custom_components.pv_surplus_mining.async_setup_entry", return_value=True
+    ), patch(
+        "custom_components.pv_surplus_mining.async_unload_entry", return_value=True
     ):
-        _mock_logins(m, ok=True)
         result = await hass.config_entries.flow.async_configure(result["flow_id"], _form_input(fleet))
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
