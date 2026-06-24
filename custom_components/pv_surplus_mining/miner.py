@@ -18,6 +18,28 @@ from .models import CommandResult, MinerStatus, TunerState
 _AUDIT = logging.getLogger(f"{__package__}.audit")
 
 
+def parse_power_constraints(raw: dict) -> tuple[int, int, int] | None:
+    """Best-effort extract (min_w, max_w, step_w) from /configuration/constraints.
+
+    Field nesting is undocumented; accept either {"watt": N} or a bare number.
+    Returns None when power-target min/max cannot be found (caller falls back
+    to manual entry).
+    """
+    def _watt(v):
+        if isinstance(v, dict):
+            return v.get("watt")
+        return v
+
+    pt = ((raw or {}).get("tuner_constraints") or {}).get("power_target") or {}
+    lo, hi, step = _watt(pt.get("min")), _watt(pt.get("max")), _watt(pt.get("step"))
+    if lo is None or hi is None:
+        return None
+    try:
+        return int(lo), int(hi), int(step) if step is not None else 100
+    except (TypeError, ValueError):
+        return None
+
+
 class MinerConfig(BaseModel):
     id: str
     model: str
@@ -81,6 +103,9 @@ class AioBraiinsClient:
         raw = await self._request_json("GET", "/performance/tuner-state")
         target = (raw.get("power_target") or {}).get("watt")
         return TunerState(power_target_w=target, mode=raw.get("mode"), profile=raw.get("profile"), raw=raw)
+
+    async def get_constraints(self) -> dict:
+        return await self._request_json("GET", "/configuration/constraints")
 
     async def set_power_target(self, watt: int) -> None:
         await self._request_json("PUT", "/performance/power-target", json={"watt": watt})

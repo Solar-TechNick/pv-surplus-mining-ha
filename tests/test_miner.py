@@ -5,7 +5,7 @@ from aioresponses import aioresponses
 from custom_components.pv_surplus_mining.errors import (
     MinerUnavailableError, OutOfRangeError, RateLimitedError, UpstreamError,
 )
-from custom_components.pv_surplus_mining.miner import AioBraiinsClient, MinerConfig, MinerController
+from custom_components.pv_surplus_mining.miner import AioBraiinsClient, MinerConfig, MinerController, parse_power_constraints
 
 CFG = MinerConfig(id="s21plus_01", model="S21+", ip="10.0.0.5", priority=1,
                   min_power_w=1400, max_power_w=4000, command_cooldown_sec=120,
@@ -187,3 +187,32 @@ async def test_pause_verify_lenient_on_unexpected_status():
     assert res.result == "ok"   # no exception
     assert res.verified is False
     assert ctrl.paused is True  # flag still set; pause PUT succeeded
+
+
+# ── Constraints tests ─────────────────────────────────────────────────────────
+
+def test_parse_power_constraints_nested_watt():
+    raw = {"tuner_constraints": {"power_target": {"min": {"watt": 817}, "max": {"watt": 6435}, "step": {"watt": 100}}}}
+    assert parse_power_constraints(raw) == (817, 6435, 100)
+
+
+def test_parse_power_constraints_flat():
+    raw = {"tuner_constraints": {"power_target": {"min": 944, "max": 6435}}}
+    assert parse_power_constraints(raw) == (944, 6435, 100)   # step defaults to 100
+
+
+def test_parse_power_constraints_missing_returns_none():
+    assert parse_power_constraints({}) is None
+    assert parse_power_constraints({"tuner_constraints": {}}) is None
+
+
+async def test_get_constraints_calls_endpoint():
+    cfg = MinerConfig(id="m", model="x", ip="10.0.0.9", priority=1, min_power_w=800, max_power_w=6435)
+    base = "http://10.0.0.9/api/v1"
+    with aioresponses() as m:
+        m.post(f"{base}/auth/login", payload={"token": "T"})
+        m.get(f"{base}/configuration/constraints",
+              payload={"tuner_constraints": {"power_target": {"min": {"watt": 800}, "max": {"watt": 6435}}}})
+        async with aiohttp.ClientSession() as session:
+            raw = await AioBraiinsClient(cfg, "pw", session).get_constraints()
+    assert parse_power_constraints(raw) == (800, 6435, 100)
