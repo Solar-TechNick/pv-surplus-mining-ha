@@ -20,6 +20,14 @@ class FleetController:
     def max_state(self) -> int:
         return max(self.states) if self.states else 0
 
+    def state_power_total(self, state_id: int) -> float:
+        """Sum of active power targets (W) for a state; 0 for unknown/all-sleep."""
+        targets = self.states.get(state_id, {})
+        return float(sum(
+            (t.power_w or 0) for t in targets.values()
+            if t.action == "active" and t.power_w is not None
+        ))
+
     def max_available_state(self, available_ids: set[str]) -> int:
         best = 0
         for sid in sorted(self.states):

@@ -8,5 +8,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Solar-TechNick/pv-surplus-mining-ha/issues",
   "requirements": ["pydantic>=2,<3", "PyYAML>=6"],
-  "version": "0.2.3"
+  "version": "0.2.4"
 }

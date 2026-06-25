@@ -168,3 +168,66 @@ async def test_simulate_grid_overrides_real_sensor(hass):
     c.simulated_grid_w = -3000  # simulate 3 kW surplus/export
     data = await c._async_update_data()
     assert data["grid_w"] == -3000   # the simulated value drives the loop, not the sensor
+
+
+# ── PV-production mode tests ───────────────────────────────────────────────────
+
+async def test_pv_mode_steps_up_on_pv_production(hass):
+    """In PV mode, available PV (exceeding current fleet draw) steps the fleet up,
+    even while the real grid is importing (house load is ignored)."""
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
+                        step_up_export_threshold_w=700, step_up_required_duration_s=5, min_state_dwell_s=0)
+    c, a = _coord(hass, cfg)
+    c.pv_entity = "sensor.pv"; c.pv_mode = True
+    hass.states.async_set("sensor.grid_power", "5000")  # real grid importing -> ignored in PV mode
+    hass.states.async_set("sensor.pv", "3000")          # 3 kW PV production
+    data = await c._async_update_data()
+    assert data["control_mode"] == "pv_production"
+    assert data["pv_w"] == 3000.0
+    assert data["target_state"] == 1          # PV headroom -> step up
+    assert a.applied[-1] == 2000              # state 1 sets power_w=2000
+
+
+async def test_pv_mode_steps_down_when_miners_exceed_pv(hass):
+    """In PV mode, when the fleet draws more than PV produces, it ramps down —
+    regardless of the real grid (which here is exporting)."""
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
+                        step_down_import_threshold_w=250, step_down_required_duration_s=5)
+    c, a = _coord(hass, cfg)
+    c.loop.current_state = 1                  # fleet running at 2000 W
+    c.pv_entity = "sensor.pv"; c.pv_mode = True
+    hass.states.async_set("sensor.grid_power", "-9999")  # real grid exporting -> ignored in PV mode
+    hass.states.async_set("sensor.pv", "500")            # PV below fleet draw
+    data = await c._async_update_data()
+    assert data["control_mode"] == "pv_production"
+    assert data["target_state"] == 0          # miners exceed PV -> ramp down
+    assert a.applied[-1] == ("curtail", "sleep")
+
+
+async def test_pv_mode_unknown_pv_holds(hass):
+    """PV reading unavailable -> neutral sample -> hold, never increase."""
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
+                        step_up_required_duration_s=5, min_state_dwell_s=0)
+    c, a = _coord(hass, cfg)
+    c.loop.current_state = 1
+    c.pv_entity = "sensor.pv"; c.pv_mode = True
+    hass.states.async_set("sensor.pv", "unavailable")
+    data = await c._async_update_data()
+    assert data["pv_w"] is None
+    assert data["target_state"] == 1          # held, not increased
+    assert a.applied == []
+
+
+async def test_surplus_mode_ignores_pv(hass):
+    """With PV mode off (default), the grid drives the loop and PV is display-only."""
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
+                        step_up_export_threshold_w=700, step_up_required_duration_s=5, min_state_dwell_s=0)
+    c, a = _coord(hass, cfg)
+    c.pv_entity = "sensor.pv"                  # pv_mode stays False
+    hass.states.async_set("sensor.grid_power", "100")   # mild import -> holds (no step up, no emergency)
+    hass.states.async_set("sensor.pv", "9000")          # plenty of PV, but ignored in surplus mode
+    data = await c._async_update_data()
+    assert data["control_mode"] == "surplus"
+    assert data["pv_w"] == 9000.0             # still read for display
+    assert data["target_state"] == 0
+    assert a.applied == []

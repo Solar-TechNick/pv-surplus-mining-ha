@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import timedelta
 from pathlib import Path
 
@@ -46,6 +47,10 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         self.manual_state = 0
         self.max_state = config.max_state
         self.normal_mode = False
+        # PV-production mode: when on, the loop tracks PV production (pv_entity)
+        # instead of grid surplus — miners ramp to consume the PV output regardless
+        # of house load. Off (default) = control on grid surplus at the meter.
+        self.pv_mode = False
         # test/simulation: when simulate_grid is on, the loop uses simulated_grid_w
         # (+import / -export) instead of the real grid sensor.
         self.simulate_grid = False
@@ -57,6 +62,26 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         from .normalize import normalize_grid_power
         state = self.hass.states.get(self.grid_entity)
         return normalize_grid_power(state.state if state else None, self.import_positive)
+
+    def _read_pv(self) -> float | None:
+        """PV production in watts (non-negative), or None if unavailable."""
+        if not self.pv_entity:
+            return None
+        state = self.hass.states.get(self.pv_entity)
+        if state is None:
+            return None
+        raw = state.state
+        if raw is None or str(raw).strip().lower() in ("unknown", "unavailable", "none", ""):
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        if (state.attributes or {}).get("unit_of_measurement") in ("kW", "kw"):
+            value *= 1000.0
+        return abs(value)
 
     async def _async_update_data(self) -> dict:
         statuses = {}
@@ -87,7 +112,17 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         any_crit = any(t >= CRIT_TEMP_C for t in temps)
 
         grid_w = self._read_grid()
-        sample = grid_w if grid_w is not None else 0.0   # invalid grid -> neutral -> hold (never increase)
+        pv_w = self._read_pv()
+        if self.pv_mode and not self.simulate_grid:
+            # PV-production control: drive miners to consume the PV output (less the
+            # export buffer baked into the step thresholds), independent of house load.
+            # Signal (import-positive) = current fleet draw − PV. Negative => PV
+            # headroom available => step up; positive => miners exceed PV => step down.
+            # PV unknown -> neutral hold (never increase).
+            miner_target_w = self.fleet.state_power_total(self.loop.current_state)
+            sample = (miner_target_w - pv_w) if pv_w is not None else 0.0
+        else:
+            sample = grid_w if grid_w is not None else 0.0   # invalid grid -> neutral -> hold (never increase)
 
         # Note: `telemetry_stale` and `repeated_failures` are intentionally left at their
         # defaults (False). This integration handles grid-sensor loss by holding (feeding a
@@ -124,6 +159,9 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         return {
             "grid_w": grid_w,
             "grid_avg_w": self.loop.grid_avg_w,
+            "pv_w": pv_w,
+            "control_mode": "pv_production" if self.pv_mode else "surplus",
+            "control_signal_w": sample,
             "current_state": self.loop.current_state,
             "target_state": decision.target_state if engaged else self.loop.current_state,
             "max_available_state": self.loop.max_available_state,

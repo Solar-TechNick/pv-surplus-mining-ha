@@ -18,6 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entitie
         _DataSensor(coordinator, "max_available_state", "Max available state", lambda d: d.get("max_available_state")),
         _PowerSensor(coordinator, "grid_power_w", "Grid power", lambda d: d.get("grid_w")),
         _PowerSensor(coordinator, "grid_avg_w", "Grid power (avg)", lambda d: d.get("grid_avg_w")),
+        _PowerSensor(coordinator, "pv_power_w", "PV production", lambda d: d.get("pv_w")),
     ]
     for mid in coordinator.fleet.miners:
         entities.append(_PowerSensor(coordinator, f"{mid}_power_w", f"{mid} power",
