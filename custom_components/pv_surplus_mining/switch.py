@@ -17,6 +17,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entitie
         _ControlSwitch(coordinator, "manual_override", "Manual override"),
         _ControlSwitch(coordinator, "normal_mode", "Normal mode"),
         _ControlSwitch(coordinator, "pv_mode", "Control on PV production"),
+        _ControlSwitch(coordinator, "dynamic_power", "Dynamic power (W)"),
         _ControlSwitch(coordinator, "simulate_grid", "Simulate grid (test)"),
     ]
     for mid in coordinator.fleet.miners:
