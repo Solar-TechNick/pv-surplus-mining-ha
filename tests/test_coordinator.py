@@ -183,6 +183,20 @@ async def test_in_sync_state_not_recommanded(hass):
     assert a.applied == []              # idempotent: nothing re-commanded
 
 
+async def test_manual_override_engages_and_commands(hass):
+    """Manual override alone (automation off) must engage the controller and apply
+    the manual state — not sit observe-only."""
+    c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=False))
+    c.manual_override = True
+    c.manual_state = 1                  # run miner "a" at state 1 (active@2000)
+    a.paused = True                     # currently paused
+    hass.states.async_set("sensor.grid_power", "0")
+    data = await c._async_update_data()
+    assert data["target_state"] == 1                 # manual state applied, not observe-only
+    assert a.applied and a.applied[-1] == 2000        # miner commanded/resumed
+    assert "observe-only" not in (data["reason"] or "")
+
+
 async def test_engaged_via_emergency_switch_still_commands(hass):
     c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=False))
     c.loop.current_state = 1

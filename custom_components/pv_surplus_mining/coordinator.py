@@ -157,7 +157,9 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # enhancement when `telemetry_stale` could be wired to a consecutive-None counter.
         normal = self.normal_mode and not self.emergency_stop
         inputs = ControlInputs(
-            auto_enabled=(self.auto_enabled or normal),
+            # manual_override implies "automation active" so decide() reaches its
+            # manual-override branch (which sits after the auto-disabled hold).
+            auto_enabled=(self.auto_enabled or normal or self.manual_override),
             emergency_stop=self.emergency_stop,
             manual_override=(self.manual_override or normal),
             manual_state=(self.fleet.max_state if normal else self.manual_state),
@@ -180,7 +182,8 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # miners, and re-issues resume()/pause() for the ones that are not — so a
         # paused miner that should be running gets woken every tick until it is,
         # instead of the controller silently believing it ramped up.
-        engaged = self.auto_enabled or self.normal_mode or self.emergency_stop
+        engaged = (self.auto_enabled or self.normal_mode or self.emergency_stop
+                   or self.manual_override)
         if engaged and (decision.changed or decision.emergency
                         or self._state_desynced(decision.target_state, statuses)):
             try:
