@@ -167,7 +167,8 @@ class MinerController:
             stats = await self.client.get_stats()
             cooling = await self.client.get_cooling_state()
             tuner = await self.client.get_tuner_state()
-        except AdapterError:
+        except AdapterError as exc:
+            _AUDIT.warning("get_status(%s) FAILED: %r", self.cfg.id, exc)
             return MinerStatus(miner_id=self.cfg.id, online=False, available=self.available)
         # status enum: 0 unspecified, 1 not_started, 2 normal, 3 paused, 4 suspended, 5 restricted
         status = details.get("status")
