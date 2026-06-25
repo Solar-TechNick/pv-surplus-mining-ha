@@ -45,8 +45,12 @@ a repository file.
 
 ### Modes
 
-- **PV surplus** (default): the controller follows grid surplus, ramping miners
-  up/down to consume export without importing.
+- **PV surplus** (default): the controller follows grid surplus, **snapping
+  straight to the fleet state whose total power matches the current surplus**
+  (rather than one step at a time), so a fine-grained matrix tracks the surplus
+  quickly. The move is still gated by the sustained-export timer and the per-state
+  dwell, keeping it tuner-safe; ramp-down toward the matching state is fast, and
+  hard import / emergency stop still drop to the safe state instantly.
 - **Normal mode** (`Normal mode` switch on): every available miner runs at its
   default power 24/7, ignoring surplus. **Emergency stop still overrides it.**
 
@@ -75,8 +79,16 @@ per miner, replacing `<id>` with your miner's slug.
 
 ## Fleet & ramp order
 
-Ramps **lowest-minimum first** to capture small surpluses — Antminer
-**S19j Pro+** → **S19j Pro** → **S21+** (the S21+'s high minimum power means it
-only joins once there's a large, stable surplus). See
-[`examples/fleet-states.yaml`](examples/fleet-states.yaml) for a complete
-state matrix built from real tuner ranges.
+Two ready-made matrices are in `examples/`:
+
+- [`fleet-states.yaml`](examples/fleet-states.yaml) — **lowest-minimum first**
+  (S19j Pro+ → S19j Pro → S21+), coarse ~700 W steps. Captures small surpluses.
+- [`fleet-states-s21-priority.yaml`](examples/fleet-states-s21-priority.yaml) —
+  **S21+ priority**, fine ~200 W steps: the efficient S21+ is ramped to full
+  first (most hashrate per watt), then the S19j units. Best paired with the
+  snap-to-surplus ramp. Regenerate it for your fleet with
+  [`scripts/gen_s21_priority_matrix.py`](scripts/gen_s21_priority_matrix.py)
+  (edit the per-miner min/default values at the top).
+
+The S21+'s high minimum power (2457 W) means it can only run on a large surplus;
+below that, the low-minimum S19j Pro+ holds the small surplus.

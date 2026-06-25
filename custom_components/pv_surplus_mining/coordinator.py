@@ -63,14 +63,17 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             mid: int(ctrl.cfg.power_targets_w.get("normal") or ctrl.cfg.max_power_w)
             for mid, ctrl in fleet.miners.items()
         }
-        # dynamic-power mode: continuous allocation instead of discrete fleet states.
-        # Each tick it sets miners' watts to track the surplus, filling the most
-        # efficient (highest-minimum) miner first; writes are tuner-rate-limited by
-        # the per-miner command cooldown. Off => discrete step matrix.
-        self.dynamic_power = False
         # whether the matrix is auto-generated (regenerate on enable changes) vs a
         # user-supplied file (left untouched).
         self._matrix_generated = True
+        self._sync_loop_state_power()
+
+    def _sync_loop_state_power(self) -> None:
+        """Publish the matrix's per-state total watts to the loop so its ramp-up/
+        down can snap toward the state that matches the current surplus."""
+        self.loop.state_power_w = {
+            sid: self.fleet.state_power_total(sid) for sid in self.fleet.states
+        }
 
     def _rebuild_fleet_states(self) -> None:
         """Regenerate the fleet-state matrix from currently-enabled miners; disabled
@@ -89,6 +92,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             for mid in self.fleet.miners:
                 states[sid].setdefault(mid, FleetStateTarget(action="sleep"))
         self.fleet.states = states
+        self._sync_loop_state_power()
         top = max(states)
         if self.loop.current_state > top:
             self.loop.current_state = top
@@ -119,37 +123,6 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         if (state.attributes or {}).get("unit_of_measurement") in ("kW", "kw"):
             value *= 1000.0
         return abs(value)
-
-    def _dynamic_allocation(self, total: float) -> dict[str, int | None]:
-        """Allocate `total` watts across enabled miners for dynamic mode: all on at
-        their minimums once the budget covers it, then the surplus above that fills
-        the highest-minimum (most efficient, e.g. S21+) miner first, up to each
-        miner's configured cap. Below the all-on budget, ramp the lowest-minimum
-        miners first. Returns {miner_id: watts | None(=off)}."""
-        enabled = [m for m in self.fleet.miners if self.miner_enabled.get(m, True)]
-        mn = {m: self.fleet.miners[m].cfg.min_power_w for m in self.fleet.miners}
-        cap = {m: int(self.miner_power_w.get(m) or self.fleet.miners[m].cfg.max_power_w)
-               for m in self.fleet.miners}
-        alloc: dict[str, int | None] = {m: None for m in self.fleet.miners}
-        if not enabled or total < min(mn[m] for m in enabled):
-            return alloc
-        combined_min = sum(mn[m] for m in enabled)
-        if total >= combined_min:
-            for m in enabled:
-                alloc[m] = mn[m]
-            extra = total - combined_min
-            for m in sorted(enabled, key=lambda x: mn[x], reverse=True):  # highest-min first
-                give = int(min(extra, cap[m] - mn[m]))
-                alloc[m] += give
-                extra -= give
-        else:
-            remaining = total
-            for m in sorted(enabled, key=lambda x: mn[x]):  # lowest-min first
-                give = int(min(remaining, cap[m]))
-                if give >= mn[m]:
-                    alloc[m] = give
-                    remaining -= give
-        return alloc
 
     def _state_desynced(self, target_state: int, statuses: dict) -> bool:
         """True if any miner's live pause posture disagrees with what target_state
@@ -256,8 +229,6 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
 
         if self.normal_mode and not decision.emergency:
             disp_target, disp_reason = self.loop.current_state, "24/7 per-miner mode"
-        elif self.dynamic_power and engaged and not decision.emergency:
-            disp_target, disp_reason = self.loop.current_state, "dynamic power tracking"
         elif engaged:
             disp_target, disp_reason = decision.target_state, decision.reason
         else:
@@ -281,26 +252,6 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
                 await self.fleet.apply_targets(targets)
             except (AdapterError, KeyError) as exc:
                 _LOGGER.warning("24/7 apply_targets failed: %s", exc)
-        elif self.dynamic_power and engaged:
-            # Continuous allocation: desired total = what the running miners already
-            # draw + the averaged surplus − the export buffer; allocate it (S21+ first).
-            # apply_targets is cooldown-rate-limited, so writes stay tuner-safe.
-            export = -self.loop.grid_avg_w
-            running_total = sum(
-                (statuses[m].power_target_w or 0)
-                for m in self.fleet.miners
-                if statuses.get(m) and statuses[m].online and not statuses[m].paused
-                and statuses[m].power_target_w
-            )
-            capsum = sum(
-                int(self.miner_power_w.get(m) or self.fleet.miners[m].cfg.max_power_w)
-                for m in self.fleet.miners if self.miner_enabled.get(m, True)
-            )
-            desired = max(0.0, min(running_total + export - self.config.export_reserve_w, float(capsum)))
-            try:
-                await self.fleet.apply_targets(self._dynamic_allocation(desired))
-            except (AdapterError, KeyError) as exc:
-                _LOGGER.warning("dynamic apply_targets failed: %s", exc)
         elif engaged and (decision.changed or self._state_desynced(decision.target_state, statuses)):
             try:
                 await self.fleet.apply_state(decision.target_state, force=decision.emergency)

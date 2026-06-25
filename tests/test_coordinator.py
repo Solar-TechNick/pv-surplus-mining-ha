@@ -112,36 +112,42 @@ async def test_disabled_miner_is_force_paused(hass):
     assert ("pause",) in a.applied
 
 
-async def test_dynamic_allocation_fills_highest_min_first(hass):
-    """Dynamic allocation: below the all-on budget run the lowest-minimum miner;
-    above it, all on at minimum and the surplus fills the highest-minimum (most
-    efficient, e.g. S21+) miner first."""
-    a = StubCtrl("a", 1, min_power_w=817, max_power_w=3300)
-    b = StubCtrl("b", 2, min_power_w=944, max_power_w=3068)
-    s = StubCtrl("s", 3, min_power_w=2457, max_power_w=3878)
-    fleet = FleetController({"a": a, "b": b, "s": s}, {0: {
-        "a": FleetStateTarget(action="sleep"), "b": FleetStateTarget(action="sleep"),
-        "s": FleetStateTarget(action="sleep")}})
+def _snap_fleet():
+    a = StubCtrl("a", 1, paused=True, min_power_w=1000, max_power_w=2000)
+    b = StubCtrl("b", 2, paused=True, min_power_w=1000, max_power_w=2000)
+    states = {
+        0: {"a": FleetStateTarget(action="sleep"), "b": FleetStateTarget(action="sleep")},
+        1: {"a": FleetStateTarget(action="active", power_w=1000), "b": FleetStateTarget(action="sleep")},
+        2: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="sleep")},
+        3: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="active", power_w=1000)},
+        4: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="active", power_w=2000)},
+    }
+    return FleetController({"a": a, "b": b}, states), a, b
+
+
+async def test_sync_loop_state_power_from_matrix(hass):
+    """The coordinator publishes the matrix's per-state total watts to the loop."""
+    fleet, a, b = _snap_fleet()
     c = PvSurplusCoordinator(hass, ControlConfig(loop_interval_s=10, avg_window_s=10),
                              fleet, grid_entity="sensor.g", import_positive=True)
-    c.miner_power_w = {"a": 3300, "b": 3068, "s": 3878}
-    assert c._dynamic_allocation(2000) == {"a": 2000, "b": None, "s": None}
-    al = c._dynamic_allocation(6000)                  # combined min 4218; extra 1782
-    assert al["s"] == 3878 and al["b"] == 1305 and al["a"] == 817
-    assert sum(v for v in al.values() if v) == 6000
+    assert c.loop.state_power_w == {0: 0, 1: 1000, 2: 2000, 3: 3000, 4: 4000}
 
 
-async def test_dynamic_mode_commands_miners(hass):
-    """Dynamic mode tracks the surplus and commands miners (not the step matrix)."""
-    c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10,
-                                      enabled_default=True, export_reserve_w=300))
-    c.dynamic_power = True
-    c.miner_power_w = {"a": 4000}
-    a.paused = False
-    hass.states.async_set("sensor.grid_power", "-3000")   # 3 kW export
+async def test_snap_ramps_directly_to_surplus_state(hass):
+    """A large sustained surplus jumps straight to the matching state in one tick
+    (not one state at a time)."""
+    fleet, a, b = _snap_fleet()
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
+                        export_reserve_w=300, step_up_export_threshold_w=200,
+                        step_up_required_duration_s=20, min_state_dwell_s=20, max_state=14)
+    c = PvSurplusCoordinator(hass, cfg, fleet, grid_entity="sensor.grid_power", import_positive=True)
+    # surplus has already been sustained long enough and the dwell has elapsed
+    c.loop.export_sustained_s = 999
+    c.loop.seconds_since_last_transition = 999
+    hass.states.async_set("sensor.grid_power", "-4500")   # budget 0+4500-300=4200 -> state 4
     data = await c._async_update_data()
-    assert data["reason"] == "dynamic power tracking"
-    assert a.applied                                       # allocation was commanded
+    assert data["target_state"] == 4          # snapped straight from 0 to 4
+    assert c.loop.current_state == 4
 
 
 async def test_disable_excludes_miner_from_matrix(hass):

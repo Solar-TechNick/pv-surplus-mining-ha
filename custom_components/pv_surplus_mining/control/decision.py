@@ -25,6 +25,11 @@ class DecisionContext(BaseModel):
     min_state_dwell_s: float = 120.0
     fallback_state: int = 0
     max_available_state: int = 14
+    # The fleet state whose total power best matches the current sustained
+    # surplus (computed from the matrix in the loop). Ramp-up/down snap toward
+    # this instead of moving one state at a time, so a fine matrix tracks the
+    # surplus quickly while the time gates below keep it tuner-safe.
+    surplus_target_state: int = 0
 
 
 class Decision(BaseModel):
@@ -64,14 +69,17 @@ def decide(ctx: DecisionContext) -> Decision:
     if ctx.manual_override:
         return out(ctx.manual_state, False, "manual override")
 
-    # 4. Automatic: fast ramp-down, then gated ramp-up, else hold
+    # 4. Automatic: fast ramp-down, then gated ramp-up, else hold.
+    # Both directions SNAP toward surplus_target_state (the state matching the
+    # current surplus) rather than stepping one state at a time, but always make
+    # at least one state of progress so the loop can't stall.
     if (
         ctx.import_sustained_s >= ctx.step_down_required_duration_s
         or ctx.any_fault
         or ctx.any_over_temp_warning
         or ctx.current_state > effective_max
     ):
-        return out(ctx.current_state - 1, False, "ramp down")
+        return out(min(ctx.surplus_target_state, ctx.current_state - 1), False, "ramp down")
 
     if (
         ctx.export_sustained_s >= ctx.step_up_required_duration_s
@@ -80,7 +88,8 @@ def decide(ctx: DecisionContext) -> Decision:
         and not ctx.any_fault
         and not ctx.any_over_temp_warning
         and ctx.current_state < effective_max
+        and ctx.surplus_target_state > ctx.current_state
     ):
-        return out(ctx.current_state + 1, False, "ramp up")
+        return out(ctx.surplus_target_state, False, "ramp up")
 
     return out(ctx.current_state, False, "hold")

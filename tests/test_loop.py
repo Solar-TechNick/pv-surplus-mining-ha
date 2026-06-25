@@ -37,8 +37,44 @@ def test_rolling_average_suppresses_single_export_spike():
 
 def test_dwell_resets_on_transition_timers_persist():
     loop = ControllerLoop(_cfg(), max_available_state=14, current_state=0)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000}
     loop.export_sustained_s = 999
     loop.seconds_since_last_transition = 999
     loop.tick(-5000, ControlInputs(auto_enabled=True))  # ramp up
-    assert loop.current_state == 1
+    assert loop.current_state > 0                         # a transition happened
     assert loop.seconds_since_last_transition == 0.0
+
+
+def test_surplus_target_picks_highest_state_within_budget():
+    # Budget = current draw (state 0 = 0 W) + export 5000 - reserve 300 = 4700 W.
+    # Highest state whose total <= 4700 is state 4 (4000 W); state 5 (5000) is too big.
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=300),
+                          max_available_state=14, current_state=0)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000, 4: 4000, 5: 5000}
+    loop.tick(-5000, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 4
+
+
+def test_surplus_target_counts_current_draw_as_available():
+    # Already at state 4 (4000 W draw), now near balance (export 200). Budget =
+    # 4000 + 200 - 300 = 3900 -> highest state <= 3900 is state 3. Snap down a bit.
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=300),
+                          max_available_state=14, current_state=4)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000, 4: 4000, 5: 5000}
+    loop.tick(-200, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 3
+
+
+def test_surplus_target_zero_when_importing():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=300),
+                          max_available_state=14, current_state=2)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.tick(1500, ControlInputs(auto_enabled=True))   # importing
+    assert loop.surplus_target_state == 0
+
+
+def test_surplus_target_defaults_to_current_without_matrix():
+    # No matrix info -> no snap target; hold at current (decide() then holds).
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10), max_available_state=14, current_state=3)
+    loop.tick(-5000, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 3

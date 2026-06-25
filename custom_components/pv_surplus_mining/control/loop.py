@@ -39,8 +39,28 @@ class ControllerLoop:
         self.import_sustained_s = 0.0
         self.import_emergency_s = 0.0
         self.grid_avg_w = 0.0
+        self.surplus_target_state = current_state
+        # Total miner watts per fleet-state index, set by the coordinator from the
+        # active matrix (and refreshed when it is rebuilt). Empty => no snapping.
+        self.state_power_w: dict[int, float] = {}
         dt = config.loop_interval_s
         self._window: deque[float] = deque(maxlen=max(1, round(config.avg_window_s / dt)))
+
+    def _surplus_target(self) -> int:
+        """Highest fleet state whose total power fits the current surplus budget:
+        what the running fleet already draws + the exported surplus - the reserve
+        buffer we want to keep exporting. Falls back to the current state when the
+        matrix totals are unknown (no snapping)."""
+        if not self.state_power_w:
+            return self.current_state
+        export = -self.grid_avg_w
+        current_draw = self.state_power_w.get(self.current_state, 0.0)
+        budget = current_draw + export - self.config.export_reserve_w
+        best = 0
+        for sid, total in sorted(self.state_power_w.items(), key=lambda kv: kv[1]):
+            if total <= budget:
+                best = sid
+        return best
 
     def tick(self, grid_w: float, inputs: ControlInputs | None = None) -> Decision:
         inputs = inputs or ControlInputs()
@@ -60,6 +80,8 @@ class ControllerLoop:
             self.import_emergency_s + dt if grid_w >= c.emergency_import_threshold_w else 0.0
         )
 
+        self.surplus_target_state = self._surplus_target()
+
         ctx = DecisionContext(
             grid_avg_w=self.grid_avg_w,
             current_state=self.current_state,
@@ -67,6 +89,7 @@ class ControllerLoop:
             export_sustained_s=self.export_sustained_s,
             import_sustained_s=self.import_sustained_s,
             import_emergency_s=self.import_emergency_s,
+            surplus_target_state=self.surplus_target_state,
             step_up_required_duration_s=c.step_up_required_duration_s,
             step_down_required_duration_s=c.step_down_required_duration_s,
             emergency_required_duration_s=c.emergency_required_duration_s,
