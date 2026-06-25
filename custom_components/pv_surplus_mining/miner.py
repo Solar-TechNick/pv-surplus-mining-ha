@@ -1,6 +1,7 @@
 """aiohttp Braiins REST client + per-miner safe writer (re-homed from the adapter)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -64,6 +65,7 @@ class AioBraiinsClient:
         async with self._session.post(
             f"{self._base}/auth/login",
             json={"username": self.cfg.username, "password": self._password},
+            headers={"Connection": "close"},
         ) as resp:
             if resp.status != 200:
                 raise AuthError(f"{self.cfg.id}: login failed ({resp.status})")
@@ -74,24 +76,39 @@ class AioBraiinsClient:
 
     def _auth_headers(self) -> dict:
         # Braiins OS+ expects the raw token in Authorization (NOT "Bearer <token>").
-        return {"Authorization": self.token} if self.token else {}
+        # Force "Connection: close": the miner's embedded server drops idle keep-alive
+        # connections, so reusing pooled aiohttp connections fails intermittently —
+        # a fresh connection per request is reliable.
+        h = {"Connection": "close"}
+        if self.token:
+            h["Authorization"] = self.token
+        return h
 
     async def _request_json(self, method: str, path: str, **kwargs) -> dict:
         if self.token is None:
             await self.login()
         for attempt in (1, 2):
-            async with self._session.request(
-                method, f"{self._base}{path}", headers=self._auth_headers(), **kwargs
-            ) as resp:
-                if resp.status == 401:
-                    if attempt == 1:
-                        await self.login()
-                        continue
-                    raise AuthError(f"{self.cfg.id}: re-auth failed for {path}")
-                if resp.status >= 500:
-                    raise UpstreamError(f"{self.cfg.id}: {method} {path} -> {resp.status}")
-                text = await resp.text()
-                return json.loads(text) if text else {}
+            try:
+                async with self._session.request(
+                    method, f"{self._base}{path}", headers=self._auth_headers(), **kwargs
+                ) as resp:
+                    if resp.status == 401:
+                        if attempt == 1:
+                            await self.login()
+                            continue
+                        raise AuthError(f"{self.cfg.id}: re-auth failed for {path}")
+                    if resp.status >= 500:
+                        raise UpstreamError(f"{self.cfg.id}: {method} {path} -> {resp.status}")
+                    text = await resp.text()
+                    return json.loads(text) if text else {}
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                # Transient connection error (e.g. the miner closed a pooled keep-alive
+                # connection). Retry once with a fresh login/connection, then surface as
+                # an AdapterError so callers treat it as a temporary outage, not a crash.
+                if attempt == 1:
+                    self.token = None
+                    continue
+                raise UpstreamError(f"{self.cfg.id}: {method} {path} connection error: {exc}") from exc
         raise UpstreamError(f"{self.cfg.id}: {method} {path} exhausted retries")
 
     async def get_miner_details(self) -> dict:
