@@ -18,6 +18,7 @@ class TunerState(BaseModel):
 class MinerStatus(BaseModel):
     miner_id: str
     online: bool
+    paused: bool = False
     power_target_w: int | None = None
     actual_power_w: int | None = None
     hashrate_ths: float | None = None

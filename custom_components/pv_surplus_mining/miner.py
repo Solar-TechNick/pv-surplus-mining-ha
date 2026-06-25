@@ -160,6 +160,7 @@ class MinerController:
         return MinerStatus(
             miner_id=self.cfg.id,
             online=status not in (None, 0, 1),
+            paused=status in (3, 4),
             power_target_w=tuner.power_target_w,
             actual_power_w=int(actual_power_w) if actual_power_w is not None else None,
             hashrate_ths=round(ghs / 1000.0, 2) if ghs is not None else None,

@@ -83,6 +83,22 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             value *= 1000.0
         return abs(value)
 
+    def _state_desynced(self, target_state: int, statuses: dict) -> bool:
+        """True if any miner's live pause posture disagrees with what target_state
+        wants: should be active but is paused, or should sleep but is running.
+        Miners with no fresh online status are skipped (we can't tell)."""
+        targets = self.fleet.states.get(target_state, {})
+        for mid, t in targets.items():
+            s = statuses.get(mid)
+            if s is None or not s.online:
+                continue
+            should_active = (t.action == "active" and t.power_w is not None)
+            if should_active and s.paused:
+                return True
+            if not should_active and not s.paused:
+                return True
+        return False
+
     async def _async_update_data(self) -> dict:
         statuses = {}
         for mid, ctrl in self.fleet.miners.items():
@@ -100,6 +116,14 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
                 ctrl.available = True
                 ctrl.failure_count = 0
                 _LOGGER.info("Miner %s is reachable again; clearing unavailable latch.", mid)
+
+        # Reconcile each controller's pause belief from live status (truth, not the
+        # optimistic flag set by resume()). This lets desync detection and the
+        # auto-resume in set_power_target act on reality.
+        for mid, ctrl in self.fleet.miners.items():
+            s = statuses.get(mid)
+            if s is not None and s.online:
+                ctrl.paused = s.paused
 
         available_ids = {
             mid for mid, ctrl in self.fleet.miners.items()
@@ -149,8 +173,16 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # everything off it is observe-only and never touches the miners — so a
         # hands-off install is not paused by the hard-import safety reacting to
         # the miners' own draw.
+        #
+        # Apply on a state change/emergency OR when reality drifts from the target
+        # state (a miner that should run is paused, or vice-versa). Re-applying an
+        # unchanged state is self-healing: apply_state is idempotent for in-sync
+        # miners, and re-issues resume()/pause() for the ones that are not — so a
+        # paused miner that should be running gets woken every tick until it is,
+        # instead of the controller silently believing it ramped up.
         engaged = self.auto_enabled or self.normal_mode or self.emergency_stop
-        if engaged and (decision.changed or decision.emergency):
+        if engaged and (decision.changed or decision.emergency
+                        or self._state_desynced(decision.target_state, statuses)):
             try:
                 await self.fleet.apply_state(decision.target_state, force=decision.emergency)
             except (AdapterError, KeyError) as exc:

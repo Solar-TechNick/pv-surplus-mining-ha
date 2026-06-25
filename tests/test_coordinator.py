@@ -9,24 +9,31 @@ from custom_components.pv_surplus_mining.models import (
 
 
 class StubCtrl:
-    def __init__(self, mid, prio, online=True):
+    def __init__(self, mid, prio, online=True, paused=False):
         self.cfg = MinerConfig(id=mid, model="m", ip="1.2.3.4", priority=prio, min_power_w=1000, max_power_w=4000)
         self.available = True
         self._online = online
+        self.paused = paused
         self.applied = []
     async def get_status(self):
-        return MinerStatus(miner_id=self.cfg.id, online=self._online, temp_max_c=60.0, available=self.available)
+        return MinerStatus(miner_id=self.cfg.id, online=self._online, paused=self.paused, temp_max_c=60.0, available=self.available)
     async def get_tuner_state(self):
         from custom_components.pv_surplus_mining.models import TunerState
         return TunerState(power_target_w=self.cfg.min_power_w)
     async def set_power_target(self, watt, *, force=False, audit_action=None):
-        self.applied.append(watt); return CommandResult(miner_id=self.cfg.id, action="set", target_w=watt, changed=True, verified=True, result="ok")
+        self.applied.append(watt); self.paused = False
+        return CommandResult(miner_id=self.cfg.id, action="set", target_w=watt, changed=True, verified=True, result="ok")
     async def curtail(self, action, wake_target_w=None):
-        self.applied.append(("curtail", action)); return CommandResult(miner_id=self.cfg.id, action="curtail", target_w=None, changed=True, verified=True, result="ok")
+        self.applied.append(("curtail", action))
+        if action == "sleep":
+            self.paused = True
+        return CommandResult(miner_id=self.cfg.id, action="curtail", target_w=None, changed=True, verified=True, result="ok")
 
 
-def _fleet():
-    a = StubCtrl("a", 1)
+def _fleet(paused=True):
+    # Default paused=True: a fresh fleet sits at state 0 (all sleep), so the miner
+    # is in sync with state 0 and self-heal does not re-command it.
+    a = StubCtrl("a", 1, paused=paused)
     states = {0: {"a": FleetStateTarget(action="sleep")},
               1: {"a": FleetStateTarget(action="active", power_w=2000)}}
     return FleetController({"a": a}, states), a
@@ -152,6 +159,30 @@ async def test_not_engaged_never_commands_miners(hass):
     assert "observe-only" in data["reason"]
 
 
+async def test_reapplies_when_active_miner_is_paused(hass):
+    """Self-heal: the loop is already AT the target state (no change this tick), but a
+    miner that should be running is actually paused. The coordinator must re-apply the
+    state to wake it, instead of believing it already ramped up."""
+    c, a = _coord(hass)                 # enabled_default=True; _fleet miner starts paused
+    c.loop.current_state = 1            # already at state 1 -> decision holds (no change)
+    a.paused = True                     # but the miner is actually paused (desync)
+    hass.states.async_set("sensor.grid_power", "0")  # neutral -> loop holds at 1
+    data = await c._async_update_data()
+    assert data["target_state"] == 1                 # no state change
+    assert a.applied and a.applied[-1] == 2000       # re-applied state-1 active target
+    assert a.paused is False                         # miner resumed
+
+
+async def test_in_sync_state_not_recommanded(hass):
+    """When reality already matches the held state, no redundant command is issued."""
+    c, a = _coord(hass)
+    c.loop.current_state = 1
+    a.paused = False                    # running, in sync with active state 1
+    hass.states.async_set("sensor.grid_power", "0")
+    await c._async_update_data()
+    assert a.applied == []              # idempotent: nothing re-commanded
+
+
 async def test_engaged_via_emergency_switch_still_commands(hass):
     c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=False))
     c.loop.current_state = 1
@@ -210,6 +241,7 @@ async def test_pv_mode_unknown_pv_holds(hass):
                         step_up_required_duration_s=5, min_state_dwell_s=0)
     c, a = _coord(hass, cfg)
     c.loop.current_state = 1
+    a.paused = False                          # already running at state 1 (in sync)
     c.pv_entity = "sensor.pv"; c.pv_mode = True
     hass.states.async_set("sensor.pv", "unavailable")
     data = await c._async_update_data()
