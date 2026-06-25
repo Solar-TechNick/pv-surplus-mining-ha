@@ -133,6 +133,47 @@ async def test_sync_loop_state_power_from_matrix(hass):
     assert c.loop.state_power_w == {0: 0, 1: 1000, 2: 2000, 3: 3000, 4: 4000}
 
 
+async def test_data_exposes_per_miner_target_power(hass):
+    """The data dict reports each miner's target power (its watts in the state the
+    controller is driving toward); 0 means it will be paused."""
+    fleet, a, b = _snap_fleet()
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
+                        export_reserve_w=300, step_up_export_threshold_w=200,
+                        step_up_required_duration_s=20, min_state_dwell_s=20, max_state=14)
+    c = PvSurplusCoordinator(hass, cfg, fleet, grid_entity="sensor.grid_power", import_positive=True)
+    c.loop.export_sustained_s = 999
+    c.loop.seconds_since_last_transition = 999
+    hass.states.async_set("sensor.grid_power", "-4500")   # snaps toward state 4
+    data = await c._async_update_data()
+    assert data["miner_targets"] == {"a": 2000, "b": 2000}
+
+
+async def test_miner_max_regenerates_matrix_with_new_cap(hass):
+    """Lowering a miner's max-power regenerates the S21+-priority matrix so no
+    state drives that miner above the new cap, and the top total drops."""
+    a = StubCtrl("pp", 1, paused=True, min_power_w=817, max_power_w=6435)
+    b = StubCtrl("pr", 2, paused=True, min_power_w=944, max_power_w=6435)
+    s = StubCtrl("s", 3, paused=True, min_power_w=2457, max_power_w=6435)
+    fleet = FleetController({"pp": a, "pr": b, "s": s}, {0: {
+        "pp": FleetStateTarget(action="sleep"), "pr": FleetStateTarget(action="sleep"),
+        "s": FleetStateTarget(action="sleep")}})
+    c = PvSurplusCoordinator(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, fleet_state_step_w=200),
+                             fleet, grid_entity="sensor.g", import_positive=True)
+    c.miner_max_w = {"pp": 3300, "pr": 3068, "s": 3878}
+    c._rebuild_fleet_states()
+    assert c.fleet.state_power_total(max(c.fleet.states)) == 3300 + 3068 + 3878
+
+    c.miner_max_w["pp"] = 2000          # cap the S19j Pro+ lower
+    c._rebuild_fleet_states()
+    assert c.fleet.state_power_total(max(c.fleet.states)) == 2000 + 3068 + 3878
+    for sid in c.fleet.states:
+        t = c.fleet.states[sid]["pp"]
+        if t.action == "active":
+            assert t.power_w <= 2000
+    # loop's per-state totals are refreshed so snap targeting stays correct
+    assert c.loop.state_power_w[max(c.fleet.states)] == 2000 + 3068 + 3878
+
+
 async def test_snap_ramps_directly_to_surplus_state(hass):
     """A large sustained surplus jumps straight to the matching state in one tick
     (not one state at a time)."""

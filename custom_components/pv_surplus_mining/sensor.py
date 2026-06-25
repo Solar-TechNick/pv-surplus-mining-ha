@@ -23,6 +23,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entitie
     for mid in coordinator.fleet.miners:
         entities.append(_PowerSensor(coordinator, f"{mid}_power_w", f"{mid} power",
                                      lambda d, mid=mid: (d.get("miners", {}).get(mid) or {}).get("actual_power_w")))
+        entities.append(_PowerSensor(coordinator, f"{mid}_target_power_w", f"{mid} target power",
+                                     lambda d, mid=mid: (d.get("miner_targets") or {}).get(mid)))
         entities.append(_TempSensor(coordinator, f"{mid}_temp_c", f"{mid} temperature",
                                     lambda d, mid=mid: (d.get("miners", {}).get(mid) or {}).get("temp_max_c")))
     add_entities(entities)

@@ -18,7 +18,9 @@ from .const import (
 from .control.loop import ControlInputs, ControllerLoop
 from .errors import AdapterError
 from .fleet import FleetController
-from .fleet_states import generate_fleet_states, load_fleet_states, validate_fleet_states
+from .fleet_states import (
+    generate_fleet_states, generate_s21_priority_states, load_fleet_states, validate_fleet_states,
+)
 from .miner import AioBraiinsClient, MinerConfig, MinerController
 from .models import ControlConfig, FleetStateTarget
 
@@ -63,6 +65,13 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             mid: int(ctrl.cfg.power_targets_w.get("normal") or ctrl.cfg.max_power_w)
             for mid, ctrl in fleet.miners.items()
         }
+        # miner_max_w: the maximum power each miner ramps to during SURPLUS mining
+        # (the per-miner cap in the generated matrix). Editable per miner; changing
+        # it regenerates the matrix. Defaults to each miner's default power.
+        self.miner_max_w = {
+            mid: int(ctrl.cfg.power_targets_w.get("normal") or ctrl.cfg.max_power_w)
+            for mid, ctrl in fleet.miners.items()
+        }
         # whether the matrix is auto-generated (regenerate on enable changes) vs a
         # user-supplied file (left untouched).
         self._matrix_generated = True
@@ -83,11 +92,12 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             return
         gen = [
             {"id": c.cfg.id, "min_power_w": c.cfg.min_power_w,
-             "default_power_w": int(c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
+             "cap": int(self.miner_max_w.get(mid) or c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
+             "default_power_w": int(self.miner_max_w.get(mid) or c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
              "priority": c.cfg.priority}
             for mid, c in self.fleet.miners.items() if self.miner_enabled.get(mid, True)
         ]
-        states = generate_fleet_states(gen, self.config.step_up_export_threshold_w) if gen else {0: {}}
+        states = generate_s21_priority_states(gen, self.config.fleet_state_step_w) if gen else {0: {}}
         for sid in list(states):
             for mid in self.fleet.miners:
                 states[sid].setdefault(mid, FleetStateTarget(action="sleep"))
@@ -269,6 +279,14 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
                     except AdapterError as exc:
                         _LOGGER.warning("disable-pause(%s) failed: %s", mid, exc)
 
+        # Per-miner power the fleet is ramping TOWARD (the miner's target in the
+        # state the controller is driving to). 0 = that miner will be paused.
+        target_targets = self.fleet.states.get(disp_target, {})
+        miner_targets = {
+            mid: int(t.power_w) if (t.action == "active" and t.power_w) else 0
+            for mid, t in target_targets.items()
+        }
+
         return {
             "grid_w": grid_w,
             "grid_avg_w": self.loop.grid_avg_w,
@@ -280,6 +298,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             "max_available_state": self.loop.max_available_state,
             "reason": disp_reason,
             "emergency": decision.emergency and engaged,
+            "miner_targets": miner_targets,
             "miners": {mid: (s.model_dump() if s else None) for mid, s in statuses.items()},
         }
 
@@ -308,9 +327,9 @@ async def async_build_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Pv
     if path and Path(path).exists():
         states = load_fleet_states(path)
     else:
-        gen = [{"id": m["id"], "min_power_w": m["min_power_w"],
+        gen = [{"id": m["id"], "min_power_w": m["min_power_w"], "cap": _default_w(m),
                 "default_power_w": _default_w(m), "priority": m.get("priority", 1)} for m in cfg[CONF_MINERS]]
-        states = generate_fleet_states(gen, control.step_up_export_threshold_w)
+        states = generate_s21_priority_states(gen, control.fleet_state_step_w)
     validate_fleet_states(states, set(miners))
     fleet = FleetController(miners, states)
 

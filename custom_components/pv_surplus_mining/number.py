@@ -19,6 +19,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entitie
     ]
     for mid, ctrl in coordinator.fleet.miners.items():
         entities.append(_MinerPowerNumber(coordinator, mid, ctrl.cfg.min_power_w, ctrl.cfg.max_power_w))
+        entities.append(_MinerMaxPowerNumber(coordinator, mid, ctrl.cfg.min_power_w, ctrl.cfg.max_power_w))
     add_entities(entities)
 
 
@@ -57,4 +58,26 @@ class _MinerPowerNumber(PvSurplusEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         self.coordinator.miner_power_w[self._mid] = int(value)
+        await self.coordinator.async_request_refresh()
+
+
+class _MinerMaxPowerNumber(PvSurplusEntity, NumberEntity):
+    """Per-miner MAX power for surplus mining: the cap this miner ramps to in the
+    fleet-state matrix. Changing it regenerates the matrix (S21+-priority)."""
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator, mid, lo, hi):
+        super().__init__(coordinator, f"{mid}_max_power", f"{mid} max power")
+        self._mid = mid
+        self._attr_native_min_value = lo
+        self._attr_native_max_value = hi
+        self._attr_native_step = 50
+
+    @property
+    def native_value(self) -> float:
+        return float(self.coordinator.miner_max_w.get(self._mid, 0))
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator.miner_max_w[self._mid] = int(value)
+        self.coordinator._rebuild_fleet_states()
         await self.coordinator.async_request_refresh()

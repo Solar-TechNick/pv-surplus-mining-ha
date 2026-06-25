@@ -35,12 +35,15 @@ views:
           - entity: sensor.pv_surplus_mining_grid_power
           - entity: sensor.pv_surplus_mining_fleet_state
 # --- Per-miner card template (copy one block per miner) ----------------------
-# Per-miner sensors are named sensor.pv_surplus_mining_<id>_power and
-# sensor.pv_surplus_mining_<id>_temperature, where <id> is the slug of the miner
-# name you set when adding it. Add under `cards:` above, replacing <id> and <name>:
+# Per-miner entities are named sensor./number.pv_surplus_mining_<id>_*, where
+# <id> is the slug of the miner name you set when adding it. Add one block per
+# miner under `cards:` above, replacing <id> and <name>:
 #
 #      - type: entities
 #        title: <name>
 #        entities:
-#          - entity: sensor.pv_surplus_mining_<id>_power
+#          - entity: sensor.pv_surplus_mining_<id>_power          # live draw
+#          - entity: sensor.pv_surplus_mining_<id>_target_power   # ramping toward
 #          - entity: sensor.pv_surplus_mining_<id>_temperature
+#          - entity: number.pv_surplus_mining_<id>_max_power      # surplus-ramp cap
+#          - entity: number.pv_surplus_mining_<id>_power_target   # 24/7 power

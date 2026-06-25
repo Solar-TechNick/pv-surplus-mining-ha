@@ -45,6 +45,58 @@ def _ramp_levels(lo: int, hi: int, step_w: int) -> list[int]:
     return [round(lo + (hi - lo) * k / n) for k in range(0, n + 1)]
 
 
+def generate_s21_priority_states(miners: list[dict], step_w: int) -> dict[int, dict[str, "FleetStateTarget"]]:
+    """Fine-grained, efficiency-priority matrix for the S21+/S19j/S19j fleet.
+
+    The most efficient miner (the S21+) has the highest power-target minimum, so
+    it cannot run on small surplus. This matrix therefore:
+      1. runs the lowest-minimum miner alone to hold tiny surplus,
+      2. ramps the highest-minimum (most efficient) miner to its cap FIRST,
+      3. adds the remaining miner, then ramps the two lower-minimum units up.
+    ``cap`` is each miner's maximum ramp power (e.g. the per-miner max-power
+    control). Ramps use ~``step_w`` increments and totals stay monotonic.
+
+    For fleets that are not exactly three miners this falls back to the
+    lowest-minimum-first ``generate_fleet_states`` (which expects
+    ``default_power_w`` per miner)."""
+    if len(miners) != 3:
+        return generate_fleet_states(miners, step_w)
+
+    pilot, middle, priority = sorted(miners, key=lambda m: m["min_power_w"])
+    pid, pmin, pcap = pilot["id"], pilot["min_power_w"], int(pilot["cap"])
+    mid_, mmin, mcap = middle["id"], middle["min_power_w"], int(middle["cap"])
+    sid_, smin, scap = priority["id"], priority["min_power_w"], int(priority["cap"])
+
+    seq: list[dict[str, int | None]] = []
+
+    def st(**w):
+        seq.append({pid: w.get(pid), mid_: w.get(mid_), sid_: w.get(sid_)})
+
+    st()                                                # 0: all off
+    st(**{pid: pmin})                                   # pilot holds tiny surplus
+    for lvl in _ramp_levels(smin, scap, step_w):        # priority ramps to cap first
+        st(**{pid: pmin, sid_: lvl})
+    st(**{pid: pmin, sid_: scap, mid_: mmin})           # middle joins at its minimum
+    for lvl in _ramp_levels(pmin, pcap, step_w)[1:]:    # ramp pilot to cap
+        st(**{pid: lvl, sid_: scap, mid_: mmin})
+    for lvl in _ramp_levels(mmin, mcap, step_w)[1:]:    # ramp middle to cap
+        st(**{pid: pcap, sid_: scap, mid_: lvl})
+
+    deduped = [seq[0]]
+    for s in seq[1:]:
+        if s != deduped[-1]:                            # rounding can repeat an endpoint
+            deduped.append(s)
+
+    return {
+        idx: {
+            m: (FleetStateTarget(action="active", power_w=int(w)) if w
+                else FleetStateTarget(action="sleep"))
+            for m, w in s.items()
+        }
+        for idx, s in enumerate(deduped)
+    }
+
+
 def generate_fleet_states(miners: list[dict], step_w: int) -> dict[int, dict[str, "FleetStateTarget"]]:
     """Build a fleet-state matrix: state 0 all-off, then ramp each miner (smallest
     minimum first) from its min to its default power; earlier miners stay at their

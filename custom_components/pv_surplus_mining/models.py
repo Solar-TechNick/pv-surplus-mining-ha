@@ -42,6 +42,9 @@ class ControlConfig(BaseModel):
     loop_interval_s: float = 10.0
     export_reserve_w: int = 300
     step_up_export_threshold_w: int = 700
+    # Granularity of the auto-generated fleet-state matrix (watts per within-miner
+    # ramp step). Independent of step_up_export_threshold_w (the surplus gate).
+    fleet_state_step_w: int = 200
     step_up_required_duration_s: float = 180.0
     step_down_import_threshold_w: int = 250
     step_down_required_duration_s: float = 30.0

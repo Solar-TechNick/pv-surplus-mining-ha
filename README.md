@@ -54,6 +54,17 @@ a repository file.
 - **Normal mode** (`Normal mode` switch on): every available miner runs at its
   default power 24/7, ignoring surplus. **Emergency stop still overrides it.**
 
+### Per-miner controls
+
+Each miner exposes:
+- **`<id> max power`** (number) — the maximum watts it ramps to during surplus
+  mining. Changing it regenerates the fleet-state matrix, so you can cap a miner
+  (e.g. keep an S19j gentler) without touching any file.
+- **`<id> target power`** (sensor) — the watts it's ramping *toward* (its target
+  in the state the controller is driving to); shows next to its live power.
+- **`<id> enabled`** (switch) — hard kill-switch (force-paused, excluded from the
+  ramp); **`<id> power (24/7)`** (number) — its power in Normal mode.
+
 ## Safety
 
 - A slept miner is **truly paused** (Braiins `actions/pause`, ~0 W), not idled at
