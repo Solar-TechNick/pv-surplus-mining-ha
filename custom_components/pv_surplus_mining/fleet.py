@@ -59,6 +59,25 @@ class FleetController:
                 ))
         return results
 
+    async def apply_targets(self, targets: dict[str, int | None], *, force: bool = False) -> list[CommandResult]:
+        """Apply explicit per-miner watt targets in merit order (None => pause).
+        Used by 24/7 mode where each miner runs at its own chosen power."""
+        ordered = sorted(self.miners.values(), key=lambda m: m.cfg.priority)
+        results: list[CommandResult] = []
+        for svc in ordered:
+            w = targets.get(svc.cfg.id)
+            try:
+                if w is None:
+                    results.append(await svc.curtail("sleep"))
+                else:
+                    results.append(await svc.set_power_target(int(w), force=force))
+            except AdapterError as exc:
+                results.append(CommandResult(
+                    miner_id=svc.cfg.id, action="apply_targets", target_w=w,
+                    changed=False, verified=False, result=f"error:{exc.__class__.__name__}",
+                ))
+        return results
+
     async def get_state(self) -> dict:
         miners_state: dict[str, int | None] = {}
         for mid, svc in self.miners.items():

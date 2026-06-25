@@ -20,7 +20,7 @@ from .errors import AdapterError
 from .fleet import FleetController
 from .fleet_states import generate_fleet_states, load_fleet_states, validate_fleet_states
 from .miner import AioBraiinsClient, MinerConfig, MinerController
-from .models import ControlConfig
+from .models import ControlConfig, FleetStateTarget
 
 _LOGGER = logging.getLogger(__name__)
 WARN_TEMP_C = 85.0
@@ -55,6 +55,38 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # (+import / -export) instead of the real grid sensor.
         self.simulate_grid = False
         self.simulated_grid_w = 0.0
+        # per-miner controls. miner_enabled: a hard kill-switch — a disabled miner is
+        # force-paused and excluded from the fleet matrix (the surplus ramp skips it).
+        # miner_power_w: the power each enabled miner runs at in 24/7 (Normal) mode.
+        self.miner_enabled = {mid: True for mid in fleet.miners}
+        self.miner_power_w = {
+            mid: int(ctrl.cfg.power_targets_w.get("normal") or ctrl.cfg.max_power_w)
+            for mid, ctrl in fleet.miners.items()
+        }
+        # whether the matrix is auto-generated (regenerate on enable changes) vs a
+        # user-supplied file (left untouched).
+        self._matrix_generated = True
+
+    def _rebuild_fleet_states(self) -> None:
+        """Regenerate the fleet-state matrix from currently-enabled miners; disabled
+        miners are excluded from the ramp and pinned to sleep in every state. No-op
+        when a custom fleet-states file is in use."""
+        if not self._matrix_generated:
+            return
+        gen = [
+            {"id": c.cfg.id, "min_power_w": c.cfg.min_power_w,
+             "default_power_w": int(c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
+             "priority": c.cfg.priority}
+            for mid, c in self.fleet.miners.items() if self.miner_enabled.get(mid, True)
+        ]
+        states = generate_fleet_states(gen, self.config.step_up_export_threshold_w) if gen else {0: {}}
+        for sid in list(states):
+            for mid in self.fleet.miners:
+                states[sid].setdefault(mid, FleetStateTarget(action="sleep"))
+        self.fleet.states = states
+        top = max(states)
+        if self.loop.current_state > top:
+            self.loop.current_state = top
 
     def _read_grid(self) -> float | None:
         if self.simulate_grid:
@@ -155,41 +187,68 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # in miner.py), rather than using the vendored core's whole-fleet emergency-to-zero,
         # which would over-react. Sustained-grid-loss escalation is a possible future
         # enhancement when `telemetry_stale` could be wired to a consecutive-None counter.
-        normal = self.normal_mode and not self.emergency_stop
+        enabled_set = {mid for mid in self.fleet.miners if self.miner_enabled.get(mid, True)}
         inputs = ControlInputs(
             # manual_override implies "automation active" so decide() reaches its
             # manual-override branch (which sits after the auto-disabled hold).
-            auto_enabled=(self.auto_enabled or normal or self.manual_override),
+            auto_enabled=(self.auto_enabled or self.manual_override),
             emergency_stop=self.emergency_stop,
-            manual_override=(self.manual_override or normal),
-            manual_state=(self.fleet.max_state if normal else self.manual_state),
-            max_state=(self.fleet.max_state if normal else self.max_state),
-            all_required_online=(available_ids == set(self.fleet.miners)),
+            manual_override=self.manual_override,
+            manual_state=self.manual_state,
+            max_state=self.max_state,
+            # only ENABLED miners are required online for step-up.
+            all_required_online=(enabled_set <= available_ids),
             any_over_temp_warning=any_warn,
             any_over_temp_critical=any_crit,
         )
         decision = self.loop.tick(sample, inputs)
 
-        # The controller only commands miners when the user has ENGAGED it
-        # (automation on, normal mode on, or the emergency-stop switch on). With
-        # everything off it is observe-only and never touches the miners — so a
-        # hands-off install is not paused by the hard-import safety reacting to
-        # the miners' own draw.
-        #
-        # Apply on a state change/emergency OR when reality drifts from the target
-        # state (a miner that should run is paused, or vice-versa). Re-applying an
-        # unchanged state is self-healing: apply_state is idempotent for in-sync
-        # miners, and re-issues resume()/pause() for the ones that are not — so a
-        # paused miner that should be running gets woken every tick until it is,
-        # instead of the controller silently believing it ramped up.
+        # The controller only commands miners when the user has ENGAGED it (automation,
+        # normal/24-7 mode, emergency-stop, or manual override). Hands-off = observe-only.
         engaged = (self.auto_enabled or self.normal_mode or self.emergency_stop
                    or self.manual_override)
-        if engaged and (decision.changed or decision.emergency
-                        or self._state_desynced(decision.target_state, statuses)):
+
+        if self.normal_mode and not decision.emergency:
+            disp_target, disp_reason = self.loop.current_state, "24/7 per-miner mode"
+        elif engaged:
+            disp_target, disp_reason = decision.target_state, decision.reason
+        else:
+            disp_target, disp_reason = self.loop.current_state, "observe-only (controller not engaged)"
+
+        # Apply. Emergency (when engaged) pauses to the fallback state, bypassing all
+        # else. Otherwise 24/7 mode applies each enabled miner's per-miner power, and
+        # auto/manual applies the fleet-state matrix — re-applying on change OR drift
+        # (self-heal: re-issues resume()/pause() until reality matches the target).
+        if decision.emergency and engaged:
+            try:
+                await self.fleet.apply_state(decision.target_state, force=True)
+            except (AdapterError, KeyError) as exc:
+                _LOGGER.warning("emergency apply_state(%s) failed: %s", decision.target_state, exc)
+        elif self.normal_mode:
+            targets = {
+                mid: (self.miner_power_w.get(mid) if self.miner_enabled.get(mid, True) else None)
+                for mid in self.fleet.miners
+            }
+            try:
+                await self.fleet.apply_targets(targets)
+            except (AdapterError, KeyError) as exc:
+                _LOGGER.warning("24/7 apply_targets failed: %s", exc)
+        elif engaged and (decision.changed or self._state_desynced(decision.target_state, statuses)):
             try:
                 await self.fleet.apply_state(decision.target_state, force=decision.emergency)
             except (AdapterError, KeyError) as exc:
                 _LOGGER.warning("apply_state(%s) failed: %s", decision.target_state, exc)
+
+        # Hard kill-switch enforcement: a disabled miner is always paused, even when
+        # observe-only — disabling is an explicit operator action, not auto control.
+        for mid, ctrl in self.fleet.miners.items():
+            if not self.miner_enabled.get(mid, True):
+                s = statuses.get(mid)
+                if s is not None and s.online and not s.paused:
+                    try:
+                        await ctrl.pause()
+                    except AdapterError as exc:
+                        _LOGGER.warning("disable-pause(%s) failed: %s", mid, exc)
 
         return {
             "grid_w": grid_w,
@@ -198,9 +257,9 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             "control_mode": "pv_production" if self.pv_mode else "surplus",
             "control_signal_w": sample,
             "current_state": self.loop.current_state,
-            "target_state": decision.target_state if engaged else self.loop.current_state,
+            "target_state": disp_target,
             "max_available_state": self.loop.max_available_state,
-            "reason": decision.reason if engaged else "observe-only (controller not engaged)",
+            "reason": disp_reason,
             "emergency": decision.emergency and engaged,
             "miners": {mid: (s.model_dump() if s else None) for mid, s in statuses.items()},
         }
@@ -242,5 +301,6 @@ async def async_build_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Pv
         import_positive=cfg.get(CONF_IMPORT_POSITIVE, True),
         pv_entity=cfg.get(CONF_PV_ENTITY),
     )
+    coordinator._matrix_generated = not (path and Path(path).exists())
     coordinator.config_entry = entry
     return coordinator

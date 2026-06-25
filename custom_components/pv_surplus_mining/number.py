@@ -12,11 +12,14 @@ from .entity import PvSurplusEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entities: AddEntitiesCallback):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     top = coordinator.fleet.max_state
-    add_entities([
+    entities = [
         _ControlNumber(coordinator, "manual_state", "Manual state", 0, top),
         _ControlNumber(coordinator, "max_state", "Max state", 0, top),
         _ControlNumber(coordinator, "simulated_grid_w", "Simulated grid (W)", -12000, 12000, step=50),
-    ])
+    ]
+    for mid, ctrl in coordinator.fleet.miners.items():
+        entities.append(_MinerPowerNumber(coordinator, mid, ctrl.cfg.min_power_w, ctrl.cfg.max_power_w))
+    add_entities(entities)
 
 
 class _ControlNumber(PvSurplusEntity, NumberEntity):
@@ -34,4 +37,24 @@ class _ControlNumber(PvSurplusEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         setattr(self.coordinator, self._key, int(value))
+        await self.coordinator.async_request_refresh()
+
+
+class _MinerPowerNumber(PvSurplusEntity, NumberEntity):
+    """Per-miner power target used in 24/7 (Normal) mode."""
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator, mid, lo, hi):
+        super().__init__(coordinator, f"{mid}_power_target", f"{mid} power (24/7)")
+        self._mid = mid
+        self._attr_native_min_value = lo
+        self._attr_native_max_value = hi
+        self._attr_native_step = 10
+
+    @property
+    def native_value(self) -> float:
+        return float(self.coordinator.miner_power_w.get(self._mid, 0))
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator.miner_power_w[self._mid] = int(value)
         await self.coordinator.async_request_refresh()

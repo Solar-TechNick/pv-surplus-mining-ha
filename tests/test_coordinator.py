@@ -28,6 +28,9 @@ class StubCtrl:
         if action == "sleep":
             self.paused = True
         return CommandResult(miner_id=self.cfg.id, action="curtail", target_w=None, changed=True, verified=True, result="ok")
+    async def pause(self):
+        self.applied.append(("pause",)); self.paused = True
+        return CommandResult(miner_id=self.cfg.id, action="pause", target_w=0, changed=True, verified=True, result="ok")
 
 
 def _fleet(paused=True):
@@ -87,16 +90,44 @@ async def test_recovery_clears_unavailable_latch(hass):
 
 # ── Normal-mode tests ─────────────────────────────────────────────────────────
 
-async def test_normal_mode_targets_top_state(hass):
-    """With normal_mode=True and a grid value that would otherwise hold (mild export),
-    the decision should target the top reachable state (fleet.max_state = 1)."""
+async def test_normal_mode_runs_per_miner_power(hass):
+    """24/7 (Normal) mode applies each enabled miner's per-miner power, independent
+    of surplus (stub default power = max 4000)."""
     c, a = _coord(hass)
     c.normal_mode = True
-    # Mild export that would normally hold at 0 (below step-up threshold)
     hass.states.async_set("sensor.grid_power", "-200")
     data = await c._async_update_data()
-    # Normal mode forces manual_override to max_state (1); decision should target 1
-    assert data["target_state"] == 1
+    assert data["reason"] == "24/7 per-miner mode"
+    assert a.applied and a.applied[-1] == 4000
+
+
+async def test_disabled_miner_is_force_paused(hass):
+    """A disabled miner is force-paused even when observe-only (explicit operator action)."""
+    c, a = _coord(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=False))
+    c.miner_enabled["a"] = False
+    a.paused = False                    # currently running
+    hass.states.async_set("sensor.grid_power", "0")
+    await c._async_update_data()
+    assert a.paused is True             # force-paused despite observe-only
+    assert ("pause",) in a.applied
+
+
+async def test_disable_excludes_miner_from_matrix(hass):
+    """Disabling a miner regenerates the matrix with that miner pinned to sleep
+    everywhere, while the remaining miner still ramps."""
+    a = StubCtrl("a", 1); b = StubCtrl("b", 2)
+    states = {
+        0: {"a": FleetStateTarget(action="sleep"), "b": FleetStateTarget(action="sleep")},
+        1: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="sleep")},
+        2: {"a": FleetStateTarget(action="active", power_w=2000), "b": FleetStateTarget(action="active", power_w=2500)},
+    }
+    fleet = FleetController({"a": a, "b": b}, states)
+    cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True, step_up_export_threshold_w=700)
+    c = PvSurplusCoordinator(hass, cfg, fleet, grid_entity="sensor.grid_power", import_positive=True)
+    c.miner_enabled["b"] = False
+    c._rebuild_fleet_states()
+    assert all(c.fleet.states[s]["b"].action == "sleep" for s in c.fleet.states)
+    assert any(c.fleet.states[s]["a"].action == "active" for s in c.fleet.states)
 
 
 async def test_normal_mode_emergency_stop_takes_precedence(hass):
