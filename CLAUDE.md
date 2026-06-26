@@ -46,7 +46,13 @@ wrapped by stateful/IO layers so the hard logic is testable without HA or networ
    calls `decide()` once per tick. Still no IO. Computes `surplus_target_state` via
    **snap-to-surplus**: the highest fleet state whose total watts fit the current
    surplus budget, so ramps jump straight to the matching state instead of stepping
-   one at a time (time gates still apply).
+   one at a time (time gates still apply). The budget is **`actual_draw_w` (MEASURED
+   fleet draw, set by the coordinator each tick) + export − reserve** — NOT the
+   current state's matrix total. This matters: the Braiins tuner reaches a power
+   target only after ramping for minutes, so matrix totals over-state real draw; an
+   earlier version anchored on the matrix total, over-committed the fleet to the top
+   state, then the slow-ramping miners overshot the surplus, imported, and the
+   emergency cutoff tripped the whole fleet off — even with kW of surplus present.
 
 3. **`coordinator.py` — `PvSurplusCoordinator(DataUpdateCoordinator)`** — the IO
    orchestrator, ticking every `loop_interval_s`. Reads grid/PV sensors, builds
@@ -86,14 +92,28 @@ dynamic miner add/edit + options flow for tuning); `__init__.py` setup/unload an
 - **Config lives in `entry.options`** (post-v2), merged over `entry.data` as
   `{**data, **options}`. Any options change triggers a full entry reload
   (`_async_reload_on_update`). New persisted config keys generally belong in options.
-- **`manifest.json` `version` is the release source of truth** (currently 0.4.0);
-  `pyproject.toml`'s version is stale/unused. Bump the manifest when releasing.
-  Commit style: `feat:`/`fix:`/`chore:` with a version bump in the feature commit.
+- **`manifest.json` `version` is the release source of truth** (check it for the
+  current value); `pyproject.toml`'s version is stale/unused. Bump the manifest when
+  releasing, then `gh release create vX.Y.Z` (HACS installs from the tagged release).
+  Commit style: `feat:`/`fix:`/`chore:` with the version bump in the feature commit.
 - **Braiins auth quirks** (`miner.py`): the raw token goes in `Authorization` (NOT
   `Bearer <token>`), and every request forces `Connection: close` (the miner drops
   pooled keep-alives, so a fresh connection per request is required for reliability).
   REST responses are parsed for *real firmware* shapes — see the status enum and
   nested `*.watt`/`degree_c` extraction in `get_status()`.
+- **The Braiins tuner ramps SLOWLY**: a power-target write is not instantaneous — the
+  tuner's `current_target` climbs toward the profile target over ~1–2 min, and each
+  miner has a ~120 s command cooldown (`set_power_target` is rate-limited). So
+  commanded target ≠ actual draw mid-ramp (use measured draw — see the loop), and
+  re-targeting faster than the tuner settles thrashes it (miners report running but
+  produce ~0 TH / 0 W). This is why `min_state_dwell_s` ≈ the command cooldown. The
+  S19j units also tend to under-reach their targets; cap them with `<id> max power`.
+- **Ramp-down / import handling is tunable** (Configure → Tuning, in `ControlConfig`):
+  descending the S21+-priority matrix sheds in merit order (S19j first, S21+ last).
+  `step_down_required_duration_s` is the grace before any ramp-down;
+  `emergency_import_threshold_w` / `emergency_required_duration_s` are the instant
+  all-off cutoff. Defaults are aggressive (fast shed); raise them for "keep mining
+  through brief import dips, then ramp down gradually" behavior.
 - **Grid sign convention**: `grid_import_positive` controls polarity; an
   invalid/`unknown`/`unavailable` grid reading normalizes to a neutral `0.0` sample
   → the loop **holds, never ramps up**. Surplus is negative grid (export).
