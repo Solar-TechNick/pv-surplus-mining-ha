@@ -230,6 +230,14 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             any_over_temp_warning=any_warn,
             any_over_temp_critical=any_crit,
         )
+        # Feed the loop the MEASURED fleet draw so its snap budget tracks reality
+        # (the Braiins tuner ramps toward a target over minutes; the matrix totals
+        # assume the target is already reached). Sum only running miners' actual
+        # watts; unknown/paused miners contribute 0 (conservative).
+        self.loop.actual_draw_w = float(sum(
+            s.actual_power_w for s in statuses.values()
+            if s is not None and s.online and not s.paused and s.actual_power_w
+        ))
         decision = self.loop.tick(sample, inputs)
 
         # The controller only commands miners when the user has ENGAGED it (automation,

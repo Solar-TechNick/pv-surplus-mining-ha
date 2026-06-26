@@ -1,0 +1,127 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A single Home Assistant custom integration (HACS, domain `pv_surplus_mining`) that
+consumes excess solar PV by modulating a Braiins OS+ Antminer fleet (S21+, S19j
+Pro+, S19j Pro) — no Node-RED, no external adapter. All code lives in
+[custom_components/pv_surplus_mining/](custom_components/pv_surplus_mining/).
+
+## Commands
+
+```bash
+# Tests MUST run on Python 3.13 — pytest-homeassistant-custom-component pins an HA
+# version that requires it; on 3.12 pip backtracks to a harness that fails teardown.
+pip install -r requirements_test.txt        # installs the HA + pytest stack
+python -m pytest                            # full suite (config in pyproject.toml: asyncio_mode=auto, -q)
+python -m pytest tests/test_decision.py     # one file
+python -m pytest tests/test_decision.py::test_ramp_up_snaps_directly_to_surplus_target  # one test
+python -m pytest -k snap                     # by keyword
+
+# Regenerate the example S21+-priority fleet matrix (edit per-miner min/default at top first):
+python scripts/gen_s21_priority_matrix.py
+```
+
+CI: `.github/workflows/test.yml` (pytest on 3.13) and `validate.yml`
+(`hassfest` + HACS validation; `brands` is intentionally ignored since this is a
+custom-repo install, not the HACS default store).
+
+## Architecture — the control pipeline
+
+Data flows **sensors → loop → decision → fleet → miners**, split into a pure core
+wrapped by stateful/IO layers so the hard logic is testable without HA or network:
+
+1. **`control/decision.py` — `decide(ctx) -> Decision`** — a pure function, no
+   state, no IO. A strict safe-by-default priority ladder: emergency (stop / hard
+   import / critical temp / stale telemetry / repeated failures, all bypassing
+   dwell) → automation-disabled hold → manual override → fast ramp-down → gated
+   ramp-up → hold. **All safety lives here.** (Note: `ControlInputs`/`DecisionContext`
+   field *defaults* are fail-open for test convenience — never rely on them; real
+   callers populate every field.)
+
+2. **`control/loop.py` — `ControllerLoop`** — holds the temporal state (rolling grid
+   average, sustained-export/import timers, per-state dwell, `current_state`) and
+   calls `decide()` once per tick. Still no IO. Computes `surplus_target_state` via
+   **snap-to-surplus**: the highest fleet state whose total watts fit the current
+   surplus budget, so ramps jump straight to the matching state instead of stepping
+   one at a time (time gates still apply).
+
+3. **`coordinator.py` — `PvSurplusCoordinator(DataUpdateCoordinator)`** — the IO
+   orchestrator, ticking every `loop_interval_s`. Reads grid/PV sensors, builds
+   `ControlInputs`, ticks the loop, and applies the decision to the fleet. Owns all
+   **operator-control state** mutated by entities: `auto_enabled`, `emergency_stop`,
+   `manual_override`, `manual_state`, `normal_mode`, `pv_mode`, `simulate_grid`, and
+   per-miner `miner_enabled` / `miner_power_w` (24-7 power) / `miner_max_w` (surplus
+   cap). Regenerates the fleet matrix when per-miner enable/cap changes.
+
+4. **`fleet.py` — `FleetController`** — applies a state across miners in priority
+   (merit) order. `apply_state(sid)` drives the matrix; `apply_targets({id: w})`
+   drives 24-7 mode; `max_available_state()` shrinks the reachable range when miners
+   drop out.
+
+5. **`miner.py`** — `AioBraiinsClient` (Braiins OS+ REST at `http://<ip>/api/v1`) +
+   `MinerController`, an **idempotent, rate-limited, verified-by-re-read** writer
+   that marks a miner unavailable after N consecutive failures. Assumes a single
+   serialized writer per miner (the coordinator loop).
+
+6. **`fleet_states.py`** — load/validate a YAML matrix, or generate one.
+   `generate_s21_priority_states` (efficiency-priority, **exactly 3 miners**) ramps
+   the most-efficient/highest-minimum S21+ to cap first; otherwise falls back to
+   `generate_fleet_states` (lowest-minimum-first). State **0 = all miners safe/off**
+   is mandatory.
+
+7. **`models.py`** — pydantic models. `ControlConfig` is the single source of truth
+   for every tunable and its default (loop interval, thresholds, durations, dwell,
+   `fleet_state_step_w` matrix granularity, etc.).
+
+**HA glue:** `entity.py` (shared `CoordinatorEntity` base) + `sensor.py` / `switch.py`
+/ `number.py` platforms (`PLATFORMS` in `const.py`); `config_flow.py` (multi-step
+dynamic miner add/edit + options flow for tuning); `__init__.py` setup/unload and the
+**v1→v2 migration** (all editable config moved from `entry.data` into `entry.options`).
+
+## Conventions & gotchas
+
+- **Config lives in `entry.options`** (post-v2), merged over `entry.data` as
+  `{**data, **options}`. Any options change triggers a full entry reload
+  (`_async_reload_on_update`). New persisted config keys generally belong in options.
+- **`manifest.json` `version` is the release source of truth** (currently 0.4.0);
+  `pyproject.toml`'s version is stale/unused. Bump the manifest when releasing.
+  Commit style: `feat:`/`fix:`/`chore:` with a version bump in the feature commit.
+- **Braiins auth quirks** (`miner.py`): the raw token goes in `Authorization` (NOT
+  `Bearer <token>`), and every request forces `Connection: close` (the miner drops
+  pooled keep-alives, so a fresh connection per request is required for reliability).
+  REST responses are parsed for *real firmware* shapes — see the status enum and
+  nested `*.watt`/`degree_c` extraction in `get_status()`.
+- **Grid sign convention**: `grid_import_positive` controls polarity; an
+  invalid/`unknown`/`unavailable` grid reading normalizes to a neutral `0.0` sample
+  → the loop **holds, never ramps up**. Surplus is negative grid (export).
+- **A slept miner is truly paused** (`actions/pause`, ~0 W), not idled at minimum, so
+  the fleet can fully stop. `set_power_target` auto-resumes a paused miner first.
+- **"Engaged" gate** (`coordinator.py`): the controller only *commands* miners when
+  engaged (auto / normal / emergency / manual override). Otherwise it's observe-only.
+  The per-miner kill-switch (`miner_enabled=False`) force-pauses even when observe-only.
+- **Matrix is auto-generated** from per-miner min/cap unless a `fleet_states_path`
+  file exists, in which case it's loaded as-is and never regenerated
+  (`_matrix_generated`).
+- Secrets: miner passwords live only in HA's encrypted `.storage`, never in repo files.
+
+## Tests
+
+Layered to match the architecture — pure layers tested without HA:
+`test_decision.py` / `test_loop.py` (pure control logic, no HA), `test_miner.py` /
+`test_fleet.py` (mocked Braiins via `aioresponses`), `test_fleet_states_gen.py`,
+`test_normalize.py`, and HA-harness tests (`test_config_flow.py`,
+`test_coordinator.py`, `test_entities.py`, `test_migration.py`, `test_init.py`,
+`test_dashboard.py`). `conftest.py` auto-enables custom integrations for every test.
+When changing control behavior, prefer adding/adjusting `test_decision.py` or
+`test_loop.py` cases over end-to-end coordinator tests.
+
+## Reference
+
+Design specs and plans for major versions are in
+[docs/superpowers/](docs/superpowers/). User-facing docs (install, entities, modes,
+safety, fleet/ramp ordering) are in [README.md](README.md). Ready-made fleet matrices
+are in [examples/](examples/); the Lovelace dashboard is
+[dashboards/pv-surplus-mining.yaml](dashboards/pv-surplus-mining.yaml).

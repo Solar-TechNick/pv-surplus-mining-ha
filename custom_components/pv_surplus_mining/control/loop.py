@@ -43,18 +43,27 @@ class ControllerLoop:
         # Total miner watts per fleet-state index, set by the coordinator from the
         # active matrix (and refreshed when it is rebuilt). Empty => no snapping.
         self.state_power_w: dict[int, float] = {}
+        # MEASURED fleet draw (sum of actual miner watts), set by the coordinator
+        # each tick. None => fall back to the current state's matrix total. Using
+        # the measured draw is critical: the Braiins tuner ramps toward a target
+        # over minutes and the matrix totals assume the full target is reached, so
+        # anchoring the budget to the matrix total over-estimates available power
+        # and over-commits the fleet to high states, which then overshoot the real
+        # surplus, import, and trip the fleet off.
+        self.actual_draw_w: float | None = None
         dt = config.loop_interval_s
         self._window: deque[float] = deque(maxlen=max(1, round(config.avg_window_s / dt)))
 
     def _surplus_target(self) -> int:
         """Highest fleet state whose total power fits the current surplus budget:
-        what the running fleet already draws + the exported surplus - the reserve
-        buffer we want to keep exporting. Falls back to the current state when the
-        matrix totals are unknown (no snapping)."""
+        what the running fleet ACTUALLY draws now + the exported surplus - the
+        reserve buffer we want to keep exporting. Falls back to the current state
+        when the matrix totals are unknown (no snapping)."""
         if not self.state_power_w:
             return self.current_state
         export = -self.grid_avg_w
-        current_draw = self.state_power_w.get(self.current_state, 0.0)
+        current_draw = (self.actual_draw_w if self.actual_draw_w is not None
+                        else self.state_power_w.get(self.current_state, 0.0))
         budget = current_draw + export - self.config.export_reserve_w
         best = 0
         for sid, total in sorted(self.state_power_w.items(), key=lambda kv: kv[1]):

@@ -56,13 +56,27 @@ def test_surplus_target_picks_highest_state_within_budget():
 
 
 def test_surplus_target_counts_current_draw_as_available():
-    # Already at state 4 (4000 W draw), now near balance (export 200). Budget =
+    # Measured draw 4000 W, now near balance (export 200). Budget =
     # 4000 + 200 - 300 = 3900 -> highest state <= 3900 is state 3. Snap down a bit.
     loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=300),
                           max_available_state=14, current_state=4)
     loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000, 4: 4000, 5: 5000}
+    loop.actual_draw_w = 4000
     loop.tick(-200, ControlInputs(auto_enabled=True))
     assert loop.surplus_target_state == 3
+
+
+def test_surplus_target_uses_measured_draw_not_matrix_total():
+    # The fleet is parked at state 5 (matrix total 5000) but is only DRAWING 2000 W
+    # (tuner still ramping). With 1000 W export the real budget is 2000+1000-300 =
+    # 2700 -> state 2, NOT something near state 5. This is what stops the controller
+    # over-committing to a high state and overshooting the surplus.
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=300),
+                          max_available_state=14, current_state=5)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000, 4: 4000, 5: 5000}
+    loop.actual_draw_w = 2000
+    loop.tick(-1000, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 2
 
 
 def test_surplus_target_zero_when_importing():
