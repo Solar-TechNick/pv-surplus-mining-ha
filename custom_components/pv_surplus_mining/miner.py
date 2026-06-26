@@ -173,6 +173,13 @@ class MinerController:
         # status enum: 0 unspecified, 1 not_started, 2 normal, 3 paused, 4 suspended, 5 restricted
         status = details.get("status")
         actual_power_w = ((stats.get("power_stats") or {}).get("approximated_consumption") or {}).get("watt")
+        # The S19j units report a null approximated_consumption at low power, which
+        # would read as 0 W — mis-displaying a running miner as off AND undercounting
+        # the control budget. For a RUNNING miner (status 2 = normal), fall back to the
+        # tuner's current power target (a close proxy for actual draw) so it always
+        # reports a sane wattage. Paused/off miners (status 3/4) keep ~0 W.
+        if actual_power_w is None and status == 2 and tuner.power_target_w:
+            actual_power_w = tuner.power_target_w
         ghs = (((stats.get("miner_stats") or {}).get("real_hashrate") or {}).get("last_1m") or {}).get("gigahash_per_second")
         temp_c = ((cooling.get("highest_temperature") or {}).get("temperature") or {}).get("degree_c")
         return MinerStatus(

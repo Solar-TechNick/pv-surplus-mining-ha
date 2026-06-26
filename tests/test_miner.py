@@ -97,6 +97,43 @@ async def test_marked_unavailable_after_repeated_failures():
         await ctrl.set_power_target(3000, force=True)
 
 
+async def test_get_status_power_falls_back_to_tuner_when_consumption_null():
+    """The S19j units report a null approximated_consumption at low power; get_status
+    must fall back to the tuner power target so a running miner isn't read as 0 W."""
+    with aioresponses() as m:
+        m.post(f"{BASE}/auth/login", payload={"token": "T"})
+        m.get(f"{BASE}/miner/details", payload={"status": 2})
+        # power_stats.approximated_consumption is null (the real-firmware S19j case)
+        m.get(f"{BASE}/miner/stats", payload={
+            "power_stats": {"approximated_consumption": None},
+            "miner_stats": {"real_hashrate": {"last_1m": {"gigahash_per_second": 15000}}}})
+        m.get(f"{BASE}/cooling/state", payload={"highest_temperature": {"temperature": {"degree_c": 55}}})
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 944}}}})
+        async with aiohttp.ClientSession() as session:
+            ctrl = MinerController(CFG, await _client(session))
+            s = await ctrl.get_status()
+    assert s.online is True and s.actual_power_w == 944   # not 0/None
+
+
+async def test_get_status_paused_miner_does_not_use_tuner_fallback():
+    """A paused miner (status 3) with null consumption must read ~0 W, not the stale
+    tuner target — otherwise a switched-off miner would look like it's still drawing."""
+    with aioresponses() as m:
+        m.post(f"{BASE}/auth/login", payload={"token": "T"})
+        m.get(f"{BASE}/miner/details", payload={"status": 3})   # paused
+        m.get(f"{BASE}/miner/stats", payload={
+            "power_stats": {"approximated_consumption": None},
+            "miner_stats": {"real_hashrate": {"last_1m": {"gigahash_per_second": 0}}}})
+        m.get(f"{BASE}/cooling/state", payload={"highest_temperature": {"temperature": {"degree_c": 40}}})
+        m.get(f"{BASE}/performance/tuner-state",
+              payload={"mode_state": {"powertargetmodestate": {"current_target": {"watt": 944}}}})
+        async with aiohttp.ClientSession() as session:
+            ctrl = MinerController(CFG, await _client(session))
+            s = await ctrl.get_status()
+    assert s.paused is True and s.actual_power_w is None   # no stale fallback
+
+
 # ── Pause / resume tests ──────────────────────────────────────────────────────
 
 async def test_pause_sets_paused_and_verifies():
