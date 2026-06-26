@@ -78,6 +78,20 @@ Each miner exposes:
   miner is marked unavailable after repeated failures (the loop then refuses to
   target any state that needs it).
 
+### Tuning the ramp-down (Configure → Tuning)
+
+On import the fleet ramps **down** in merit order — least-efficient first, the
+S21+ last — toward the state that matches the (reduced) surplus. Three options
+control how forgiving this is:
+
+- **`step_down_required_duration_s`** — how long grid import must persist before
+  ramping down at all. Raise it (e.g. **180**) to keep mining through brief dips
+  and only react to sustained import.
+- **`emergency_import_threshold_w`** / **`emergency_required_duration_s`** — the
+  hard cutoff that pauses the whole fleet at once. The defaults are deliberately
+  twitchy; raise them (e.g. **4000 W / 120 s**) so only a genuine runaway import
+  trips an instant stop and normal dips use the graceful ramp-down instead.
+
 ## Dashboard
 
 A ready-made dashboard is in [`dashboards/pv-surplus-mining.yaml`](dashboards/pv-surplus-mining.yaml).
