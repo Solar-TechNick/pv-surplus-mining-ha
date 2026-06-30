@@ -349,6 +349,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             "target_state": disp_target,
             "max_available_state": self.loop.max_available_state,
             "reason": disp_reason,
+            "engaged": engaged,
             "emergency": decision.emergency and engaged,
             "miner_targets": miner_targets,
             "miners": {mid: (s.model_dump() if s else None) for mid, s in statuses.items()},
