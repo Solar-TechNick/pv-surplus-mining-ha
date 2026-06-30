@@ -76,3 +76,24 @@ async def test_build_defaults_on_for_fresh_install(hass, hass_storage):
     entry = _entry(hass)   # no store entry seeded
     coordinator = await async_build_coordinator(hass, entry)
     assert coordinator.auto_enabled is True   # enabled_default flipped to True
+
+
+async def test_tick_persists_operator_change(hass, hass_storage):
+    from unittest.mock import AsyncMock
+    from custom_components.pv_surplus_mining.coordinator import async_build_coordinator
+    entry = _entry(hass)
+    coordinator = await async_build_coordinator(hass, entry)
+
+    # Stub out real-network get_status so _async_update_data can complete in-test.
+    stub_status = MinerStatus(miner_id="a", online=True, paused=True, available=True)
+    for ctrl in coordinator.fleet.miners.values():
+        ctrl.get_status = AsyncMock(return_value=stub_status)
+
+    hass.states.async_set("sensor.grid", "0")
+
+    coordinator.auto_enabled = False           # operator turns automation off
+    await coordinator._async_update_data()
+    await hass.async_block_till_done()
+
+    stored = hass_storage[f"{DOMAIN}.{entry.entry_id}.operator"]["data"]
+    assert stored["auto_enabled"] is False

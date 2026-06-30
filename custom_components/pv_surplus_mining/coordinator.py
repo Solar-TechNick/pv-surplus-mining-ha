@@ -331,6 +331,14 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             for mid, t in target_targets.items()
         }
 
+        # Persist operator-control state so the controller resumes exactly as the
+        # operator left it after any restart/reload (only writes when it changed).
+        if getattr(self, "config_entry", None) is not None:
+            state = self._operator_state()
+            if state != self._saved_operator:
+                self._saved_operator = state
+                await operator_store(self.hass, self.config_entry.entry_id).async_save(state)
+
         return {
             "grid_w": grid_w,
             "grid_avg_w": self.loop.grid_avg_w,
