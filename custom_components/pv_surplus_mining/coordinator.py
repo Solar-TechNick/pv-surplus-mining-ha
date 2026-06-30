@@ -19,7 +19,7 @@ from .control.loop import ControlInputs, ControllerLoop
 from .errors import AdapterError
 from .fleet import FleetController
 from .fleet_states import (
-    generate_fleet_states, generate_surplus_fill_states, load_fleet_states, validate_fleet_states,
+    generate_surplus_fill_states, load_fleet_states, validate_fleet_states,
 )
 from .miner import AioBraiinsClient, MinerConfig, MinerController
 from .models import ControlConfig, FleetStateTarget
