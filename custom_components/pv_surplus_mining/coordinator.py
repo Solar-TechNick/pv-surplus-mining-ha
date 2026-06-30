@@ -73,6 +73,12 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             mid: int(ctrl.cfg.power_targets_w.get("normal") or ctrl.cfg.max_power_w)
             for mid, ctrl in fleet.miners.items()
         }
+        # miner_steady: when True, the miner is NOT power-modulated by the surplus
+        # ramp — instead it runs ON/OFF at a fixed power (miner_power_w) and is ranked
+        # LAST in the matrix, so it only fires on surplus left over after the
+        # modulated miners. Used for tuner-sensitive units that thrash when their
+        # power target is changed (see the S19j preheat/re-tune issue).
+        self.miner_steady = {mid: False for mid in fleet.miners}
         # whether the matrix is auto-generated (regenerate on enable changes) vs a
         # user-supplied file (left untouched).
         self._matrix_generated = True
@@ -101,6 +107,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             "miner_enabled": dict(self.miner_enabled),
             "miner_power_w": dict(self.miner_power_w),
             "miner_max_w": dict(self.miner_max_w),
+            "miner_steady": dict(self.miner_steady),
         }
 
     def _apply_operator_state(self, saved: dict | None) -> None:
@@ -113,7 +120,8 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         for key in ("manual_state",):
             if key in saved:
                 setattr(self, key, int(saved[key]))
-        for attr, cast in (("miner_enabled", bool), ("miner_power_w", int), ("miner_max_w", int)):
+        for attr, cast in (("miner_enabled", bool), ("miner_power_w", int),
+                           ("miner_max_w", int), ("miner_steady", bool)):
             if isinstance(saved.get(attr), dict):
                 cur = getattr(self, attr)
                 for mid, v in saved[attr].items():
@@ -127,12 +135,30 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         when a custom fleet-states file is in use."""
         if not self._matrix_generated:
             return
-        gen = [
-            {"id": c.cfg.id, "min_power_w": c.cfg.min_power_w,
-             "cap": int(self.miner_max_w.get(mid) or c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
-             "efficiency_rank": c.cfg.efficiency_rank}
-            for mid, c in self.fleet.miners.items() if self.miner_enabled.get(mid, True)
-        ]
+        enabled = [(mid, c) for mid, c in self.fleet.miners.items()
+                   if self.miner_enabled.get(mid, True)]
+
+        def _natural(c):
+            r = c.cfg.efficiency_rank
+            return (0, r) if r is not None else (1, -c.cfg.min_power_w)
+
+        # Modulated miners fill first (most efficient first); steady miners are ranked
+        # LAST so they only take surplus left over after the modulated ramp. Explicit
+        # ranks (0..N) are assigned across the whole ordering so steady always sorts
+        # after modulated regardless of per-miner efficiency_rank.
+        modulated = sorted([(mid, c) for mid, c in enabled if not self.miner_steady.get(mid, False)],
+                           key=lambda x: _natural(x[1]))
+        steady = [(mid, c) for mid, c in enabled if self.miner_steady.get(mid, False)]
+        gen = []
+        for rank, (mid, c) in enumerate(modulated + steady):
+            if self.miner_steady.get(mid, False):
+                # ON/OFF at a fixed power (min == cap) — never power-modulated.
+                p = int(self.miner_power_w.get(mid) or c.cfg.min_power_w)
+                gen.append({"id": c.cfg.id, "min_power_w": p, "cap": p, "efficiency_rank": rank})
+            else:
+                cap = int(self.miner_max_w.get(mid) or c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w)
+                gen.append({"id": c.cfg.id, "min_power_w": c.cfg.min_power_w, "cap": cap,
+                            "efficiency_rank": rank})
         states = generate_surplus_fill_states(gen, self.config.fleet_state_step_w) if gen else {0: {}}
         for sid in list(states):
             for mid in self.fleet.miners:

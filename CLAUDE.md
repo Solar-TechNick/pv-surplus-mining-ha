@@ -65,7 +65,10 @@ wrapped by stateful/IO layers so the hard logic is testable without HA or networ
    **operator-control state** mutated by entities: `auto_enabled`, `emergency_stop`,
    `manual_override`, `manual_state`, `normal_mode`, `pv_mode`, `simulate_grid`, and
    per-miner `miner_enabled` / `miner_power_w` (24-7 power) / `miner_max_w` (surplus
-   cap). Regenerates the fleet matrix when per-miner enable/cap changes.
+   cap) / `miner_steady` (run ON/OFF at fixed `miner_power_w`, ranked LAST, NOT
+   power-modulated — for tuner-sensitive miners that thrash on target changes; see
+   the S19j preheat/re-tune gotcha). Regenerates the fleet matrix when per-miner
+   enable/cap/steady changes.
 
 4. **`fleet.py` — `FleetController`** — applies a state across miners in priority
    (merit) order. `apply_state(sid)` drives the matrix; `apply_targets({id: w})`

@@ -443,3 +443,30 @@ async def test_surplus_mode_ignores_pv(hass):
     assert data["pv_w"] == 9000.0             # still read for display
     assert data["target_state"] == 0
     assert a.applied == []
+
+
+async def test_steady_miner_runs_onoff_at_fixed_power_ranked_last(hass):
+    """A miner flagged steady runs ON/OFF at its fixed power (never modulated) and
+    is ranked LAST, so it only fires when surplus is left over after the modulated
+    miners. (For the field's defective S19j Pro: steady @ 2900 W.)"""
+    a = StubCtrl("pp", 1, paused=True, min_power_w=817, max_power_w=6435)
+    b = StubCtrl("pr", 2, paused=True, min_power_w=944, max_power_w=6435)
+    s = StubCtrl("s", 3, paused=True, min_power_w=2457, max_power_w=6435)
+    fleet = FleetController({"pp": a, "pr": b, "s": s}, {0: {
+        "pp": FleetStateTarget(action="sleep"), "pr": FleetStateTarget(action="sleep"),
+        "s": FleetStateTarget(action="sleep")}})
+    c = PvSurplusCoordinator(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, fleet_state_step_w=200),
+                             fleet, grid_entity="sensor.g", import_positive=True)
+    c.miner_max_w = {"pp": 3300, "pr": 3068, "s": 3878}
+    c.miner_power_w["pr"] = 2900          # steady power for the defective miner
+    c.miner_steady["pr"] = True
+    c._rebuild_fleet_states()
+
+    # pr only ever appears at exactly 2900 W (on/off, never power-modulated)
+    pr_levels = {st["pr"].power_w for st in c.fleet.states.values() if st["pr"].action == "active"}
+    assert pr_levels == {2900}, f"steady miner should be on/off at 2900, got {pr_levels}"
+    # ranked last: the modulated S21+ runs in states where pr is still off
+    assert any(st["s"].action == "active" and st["pr"].action == "sleep"
+               for st in c.fleet.states.values())
+    # persisted across restarts
+    assert c._operator_state()["miner_steady"]["pr"] is True

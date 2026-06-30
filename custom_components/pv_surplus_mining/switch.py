@@ -21,6 +21,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add_entitie
     ]
     for mid in coordinator.fleet.miners:
         entities.append(_MinerEnableSwitch(coordinator, mid))
+        entities.append(_MinerSteadySwitch(coordinator, mid))
     add_entities(entities)
 
 
@@ -52,6 +53,32 @@ class _MinerEnableSwitch(PvSurplusEntity, SwitchEntity):
 
     async def _set(self, value: bool):
         self.coordinator.miner_enabled[self._mid] = value
+        self.coordinator._rebuild_fleet_states()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_on(self, **kwargs):
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs):
+        await self._set(False)
+
+
+class _MinerSteadySwitch(PvSurplusEntity, SwitchEntity):
+    """Per-miner steady mode: on => the miner runs ON/OFF at its fixed power
+    (its 'power (24/7)' value) instead of being power-modulated, and is ranked
+    last in the surplus matrix. For tuner-sensitive miners that thrash when
+    their power target is changed. Toggling regenerates the matrix."""
+
+    def __init__(self, coordinator, mid):
+        super().__init__(coordinator, f"{mid}_steady", f"{mid} steady (fixed power)")
+        self._mid = mid
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.miner_steady.get(self._mid, False))
+
+    async def _set(self, value: bool):
+        self.coordinator.miner_steady[self._mid] = value
         self.coordinator._rebuild_fleet_states()
         await self.coordinator.async_request_refresh()
 

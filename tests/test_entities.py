@@ -125,3 +125,21 @@ async def test_engaged_binary_sensor_reports_status(hass, tmp_path):
         st = hass.states.get(matches[0])
         assert st.state == "off"                       # enabled_default=False in _entry_data
         assert "reason" in st.attributes
+
+
+async def test_steady_switch_toggles_coordinator(hass, tmp_path):
+    """Toggling a per-miner steady switch flips coordinator.miner_steady[mid]."""
+    fleet_file = tmp_path / "fleet-states.yaml"; fleet_file.write_text(FLEET_YAML)
+    hass.states.async_set("sensor.grid_power", "100")
+    entry = MockConfigEntry(domain=DOMAIN, data=_entry_data(fleet_file), title="PV-Surplus Mining")
+    entry.add_to_hass(hass)
+    with aioresponses() as m:
+        _mock_miner(m)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        all_switches = [s.entity_id for s in hass.states.async_all("switch")]
+        matches = [eid for eid in all_switches if "steady" in eid]
+        assert matches, f"No steady switch found; registered: {all_switches}"
+        await hass.services.async_call("switch", "turn_on", {"entity_id": matches[0]}, blocking=True)
+        assert coordinator.miner_steady["s21plus_01"] is True
