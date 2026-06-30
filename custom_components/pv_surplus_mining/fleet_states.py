@@ -97,6 +97,68 @@ def generate_s21_priority_states(miners: list[dict], step_w: int) -> dict[int, d
     }
 
 
+def generate_surplus_fill_states(miners: list[dict], step_w: int) -> dict[int, dict[str, "FleetStateTarget"]]:
+    """Efficiency-aware 'fill the surplus' matrix.
+
+    Each rung is the highest-hashrate miner allocation whose total power fits a
+    given budget: load the most-efficient runnable miner toward its cap first,
+    then the next, never running a miner below its minimum. Because exported
+    energy earns nothing, any miner may run ALONE and a less-efficient miner
+    soaks surplus the efficient one cannot (below its minimum or above its cap).
+
+    miners: list of ``{id, min_power_w, cap, efficiency_rank?}``. Lower
+    ``efficiency_rank`` = more efficient (filled first); when absent, miners are
+    ranked by DESCENDING ``min_power_w`` (the high-minimum Antminers are the
+    efficient ones). ``step_w`` sets the budget granularity.
+
+    Returns ``{state_id: {miner_id: FleetStateTarget}}`` with state 0 = all
+    sleep, totals monotonic non-decreasing, every miner present in every state,
+    and the top state = every miner at its cap.
+    """
+    if not miners:
+        return {0: {}}
+    ids = [m["id"] for m in miners]
+    caps = {m["id"]: int(m["cap"]) for m in miners}
+    mins = {m["id"]: int(m["min_power_w"]) for m in miners}
+
+    def _rank(m):
+        r = m.get("efficiency_rank")
+        return (0, int(r)) if r is not None else (1, -int(m["min_power_w"]))
+    order = sorted(miners, key=_rank)
+
+    def allocate(budget: int) -> dict[str, int]:
+        """Max-hashrate allocation with total <= budget (greedy by efficiency)."""
+        remaining = budget
+        alloc = {mid: 0 for mid in ids}
+        for m in order:
+            mid = m["id"]
+            if remaining >= mins[mid]:
+                p = min(caps[mid], remaining)
+                alloc[mid] = p
+                remaining -= p
+        return alloc
+
+    total_cap = sum(caps.values())
+    budgets = list(range(0, total_cap + 1, max(1, step_w)))
+    if budgets[-1] != total_cap:
+        budgets.append(total_cap)
+
+    seq: list[dict[str, int]] = []
+    for b in budgets:
+        a = allocate(b)
+        if not seq or a != seq[-1]:
+            seq.append(a)
+
+    return {
+        idx: {
+            mid: (FleetStateTarget(action="active", power_w=int(w)) if w
+                  else FleetStateTarget(action="sleep"))
+            for mid, w in a.items()
+        }
+        for idx, a in enumerate(seq)
+    }
+
+
 def generate_fleet_states(miners: list[dict], step_w: int) -> dict[int, dict[str, "FleetStateTarget"]]:
     """Build a fleet-state matrix: state 0 all-off, then ramp each miner (smallest
     minimum first) from its min to its default power; earlier miners stay at their
