@@ -46,13 +46,18 @@ wrapped by stateful/IO layers so the hard logic is testable without HA or networ
    calls `decide()` once per tick. Still no IO. Computes `surplus_target_state` via
    **snap-to-surplus**: the highest fleet state whose total watts fit the current
    surplus budget, so ramps jump straight to the matching state instead of stepping
-   one at a time (time gates still apply). The budget is **`actual_draw_w` (MEASURED
-   fleet draw, set by the coordinator each tick) + export − reserve** — NOT the
-   current state's matrix total. This matters: the Braiins tuner reaches a power
-   target only after ramping for minutes, so matrix totals over-state real draw; an
-   earlier version anchored on the matrix total, over-committed the fleet to the top
-   state, then the slow-ramping miners overshot the surplus, imported, and the
-   emergency cutoff tripped the whole fleet off — even with kW of surplus present.
+   one at a time (time gates + `snap_hysteresis_w` still apply). The budget is the
+   rolling average of the **CONSERVED available power = `actual_draw_w` (MEASURED
+   fleet draw) + instantaneous export − reserve** (`avail_avg_w`) — NOT the matrix
+   total, and NOT instantaneous draw mixed with *averaged* export. Two failure modes
+   this avoids: (a) anchoring on the matrix total over-states real draw (the slow
+   Braiins tuner only reaches a target after minutes) → over-commit → overshoot →
+   import → emergency cutoff; (b) mixing instantaneous draw with the 60 s-averaged
+   export breaks conservation during a transient (a miner dropping out then
+   recovering) — measured draw jumps while the export average still lags high, so the
+   budget double-counts headroom and over-commits → import. Averaging the conserved
+   `draw + instantaneous export` keeps it internally consistent. (`grid_avg_w` still
+   gates the sustained-export/import timers — averaged grid is correct there.)
 
 3. **`coordinator.py` — `PvSurplusCoordinator(DataUpdateCoordinator)`** — the IO
    orchestrator, ticking every `loop_interval_s`. Reads grid/PV sensors, builds
