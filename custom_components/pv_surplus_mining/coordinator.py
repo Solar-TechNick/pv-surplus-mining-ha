@@ -23,6 +23,7 @@ from .fleet_states import (
 )
 from .miner import AioBraiinsClient, MinerConfig, MinerController
 from .models import ControlConfig, FleetStateTarget
+from .store import operator_store
 
 _LOGGER = logging.getLogger(__name__)
 WARN_TEMP_C = 85.0
@@ -75,6 +76,9 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         # whether the matrix is auto-generated (regenerate on enable changes) vs a
         # user-supplied file (left untouched).
         self._matrix_generated = True
+        # snapshot of the last persisted operator state (set after load in the builder;
+        # Task 2 compares against this to decide whether to save on change).
+        self._saved_operator: dict | None = None
         self._sync_loop_state_power()
 
     def _sync_loop_state_power(self) -> None:
@@ -83,6 +87,38 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         self.loop.state_power_w = {
             sid: self.fleet.state_power_total(sid) for sid in self.fleet.states
         }
+
+    def _operator_state(self) -> dict:
+        """The operator-control state to persist across restarts."""
+        return {
+            "auto_enabled": self.auto_enabled,
+            "normal_mode": self.normal_mode,
+            "manual_override": self.manual_override,
+            "pv_mode": self.pv_mode,
+            "manual_state": self.manual_state,
+            "max_state": self.max_state,
+            "miner_enabled": dict(self.miner_enabled),
+            "miner_power_w": dict(self.miner_power_w),
+            "miner_max_w": dict(self.miner_max_w),
+        }
+
+    def _apply_operator_state(self, saved: dict | None) -> None:
+        """Restore persisted operator state onto the coordinator (before first tick)."""
+        if not saved:
+            return
+        for key in ("auto_enabled", "normal_mode", "manual_override", "pv_mode"):
+            if key in saved:
+                setattr(self, key, bool(saved[key]))
+        for key in ("manual_state", "max_state"):
+            if key in saved:
+                setattr(self, key, int(saved[key]))
+        for attr, cast in (("miner_enabled", bool), ("miner_power_w", int), ("miner_max_w", int)):
+            if isinstance(saved.get(attr), dict):
+                cur = getattr(self, attr)
+                for mid, v in saved[attr].items():
+                    if mid in cur:
+                        cur[mid] = cast(v)
+        self._rebuild_fleet_states()
 
     def _rebuild_fleet_states(self) -> None:
         """Regenerate the fleet-state matrix from currently-enabled miners; disabled
@@ -349,4 +385,7 @@ async def async_build_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Pv
     )
     coordinator._matrix_generated = not (path and Path(path).exists())
     coordinator.config_entry = entry
+    saved = await operator_store(hass, entry.entry_id).async_load()
+    coordinator._apply_operator_state(saved)
+    coordinator._saved_operator = coordinator._operator_state()
     return coordinator

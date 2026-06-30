@@ -21,6 +21,7 @@ def _entry_data(path):
                        "power_targets_w": {"normal": 3000}}],
         CONF_GRID_ENTITY: "sensor.grid_power", CONF_IMPORT_POSITIVE: True,
         CONF_FLEET_STATES_PATH: str(path),
+        "enabled_default": False,
     }
 
 

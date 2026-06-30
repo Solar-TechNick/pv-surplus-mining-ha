@@ -38,7 +38,7 @@ class CommandResult(BaseModel):
 
 
 class ControlConfig(BaseModel):
-    enabled_default: bool = False
+    enabled_default: bool = True
     loop_interval_s: float = 10.0
     export_reserve_w: int = 300
     step_up_export_threshold_w: int = 700
