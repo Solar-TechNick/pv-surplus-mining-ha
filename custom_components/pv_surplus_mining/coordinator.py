@@ -337,8 +337,11 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         if getattr(self, "config_entry", None) is not None:
             state = self._operator_state()
             if state != self._saved_operator:
-                self._saved_operator = state
-                await operator_store(self.hass, self.config_entry.entry_id).async_save(state)
+                try:
+                    await operator_store(self.hass, self.config_entry.entry_id).async_save(state)
+                    self._saved_operator = state  # advance marker only on success → auto-retry next tick
+                except Exception as exc:  # noqa: BLE001
+                    _LOGGER.warning("Failed to persist operator state: %s", exc)
 
         return {
             "grid_w": grid_w,
