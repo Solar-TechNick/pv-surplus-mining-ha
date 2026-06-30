@@ -2,48 +2,106 @@ title: PV-Surplus Mining
 views:
   - title: Mining
     path: mining
+    icon: mdi:solar-power
     cards:
       - type: entities
-        title: Controls
+        title: Mode & control
         entities:
+          - entity: switch.pv_surplus_mining_automation_enabled
+            name: Automation (track surplus)
           - entity: switch.pv_surplus_mining_normal_mode
             name: Normal mode (24/7)
-          - entity: switch.pv_surplus_mining_automation_enabled
-            name: Automation enabled
-          - entity: switch.pv_surplus_mining_emergency_stop
-            name: Emergency stop
+          - entity: switch.pv_surplus_mining_control_on_pv_production
+            name: Control on PV production
           - entity: switch.pv_surplus_mining_manual_override
             name: Manual override
           - entity: number.pv_surplus_mining_manual_state
-          - entity: number.pv_surplus_mining_max_state
-      - type: gauge
-        entity: sensor.pv_surplus_mining_grid_power
-        name: Grid power (+import / -export)
-        min: -12000
-        max: 12000
+            name: Manual state (when overriding)
+          - entity: switch.pv_surplus_mining_emergency_stop
+            name: Emergency stop (all off)
+          - type: divider
+          - entity: binary_sensor.pv_surplus_mining_controller_engaged
+            name: Controller engaged
+            secondary_info: last-changed
+
       - type: entities
         title: Status
         entities:
           - entity: sensor.pv_surplus_mining_fleet_state
+            name: Fleet state
           - entity: sensor.pv_surplus_mining_target_state
+            name: Target state
           - entity: sensor.pv_surplus_mining_max_available_state
+            name: Max available state
+          - entity: number.pv_surplus_mining_max_state
+            name: Max state (matrix top)
+          - type: divider
+          - entity: sensor.pv_surplus_mining_grid_power
+            name: Grid (+import / −export)
           - entity: sensor.pv_surplus_mining_grid_power_avg
+            name: Grid (rolling avg)
+          - entity: sensor.pv_surplus_mining_pv_production
+            name: PV production
+
+      - type: gauge
+        entity: sensor.pv_surplus_mining_grid_power
+        name: Grid power (+import / −export)
+        unit: W
+        min: -12000
+        max: 12000
+        needle: true
+        severity:
+          green: -12000
+          yellow: 0
+          red: 250
+
+      # --- Energy graph: PV vs grid (surplus = negative grid). Add per-miner power
+      #     lines here too (see the per-miner template at the bottom). ---
       - type: history-graph
-        title: Surplus tracking (24 h)
+        title: Power — PV / grid-surplus (24 h)
         hours_to_show: 24
         entities:
+          - entity: sensor.pv_surplus_mining_pv_production
+            name: PV production
           - entity: sensor.pv_surplus_mining_grid_power
+            name: Grid (+import / −export)
+
+      - type: history-graph
+        title: Fleet ramp (24 h)
+        hours_to_show: 24
+        entities:
           - entity: sensor.pv_surplus_mining_fleet_state
+            name: Fleet state
+          - entity: sensor.pv_surplus_mining_target_state
+            name: Target state
+
+      - type: entities
+        title: Test / simulation (advanced)
+        entities:
+          - entity: switch.pv_surplus_mining_simulate_grid_test
+            name: Simulate grid
+          - entity: number.pv_surplus_mining_simulated_grid_w
+            name: Simulated grid (W)
 # --- Per-miner card template (copy one block per miner) ----------------------
-# Per-miner entities are named sensor./number.pv_surplus_mining_<id>_*, where
+# Per-miner entities are sensor./number./switch.pv_surplus_mining_<id>_*, where
 # <id> is the slug of the miner name you set when adding it. Add one block per
-# miner under `cards:` above, replacing <id> and <name>:
+# miner under `cards:` above, replacing <id> and <name>. NOTE: on some installs
+# the binary_sensor and steady switch get a prefix (e.g. tui_) from a renamed
+# device — use the exact entity_id shown in Developer Tools › States.
 #
 #      - type: entities
 #        title: <name>
 #        entities:
-#          - entity: sensor.pv_surplus_mining_<id>_power          # live draw
-#          - entity: sensor.pv_surplus_mining_<id>_target_power   # ramping toward
+#          - entity: sensor.pv_surplus_mining_<id>_power            # live draw
+#          - entity: sensor.pv_surplus_mining_<id>_target_power     # ramping toward
 #          - entity: sensor.pv_surplus_mining_<id>_temperature
-#          - entity: number.pv_surplus_mining_<id>_max_power      # surplus-ramp cap
-#          - entity: number.pv_surplus_mining_<id>_power_target   # 24/7 power
+#          - type: divider
+#          - entity: switch.pv_surplus_mining_<id>_enabled          # kill-switch
+#          - entity: switch.pv_surplus_mining_<id>_steady_fixed_power  # run on/off at fixed power
+#          - entity: number.pv_surplus_mining_<id>_max_power        # surplus-ramp cap
+#          - entity: number.pv_surplus_mining_<id>_power_target     # fixed/24-7 power
+#
+# To add a miner's live draw to the energy graph above, add this under that
+# graph's `entities:` list:
+#          - entity: sensor.pv_surplus_mining_<id>_power
+#            name: <name> draw
