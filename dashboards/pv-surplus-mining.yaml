@@ -55,16 +55,19 @@ views:
           yellow: 0
           red: 250
 
-      # --- Energy graph: PV vs grid (surplus = negative grid). Add per-miner power
-      #     lines here too (see the per-miner template at the bottom). ---
+      # --- Headline graph: grid power vs miner draw. Add per-miner power lines
+      #     here (see the per-miner template at the bottom). ---
       - type: history-graph
-        title: Power — PV / grid-surplus (24 h)
+        title: Grid power vs miner draw (24 h)
         hours_to_show: 24
         entities:
-          - entity: sensor.pv_surplus_mining_pv_production
-            name: PV production
           - entity: sensor.pv_surplus_mining_grid_power
             name: Grid (+import / −export)
+          - entity: sensor.pv_surplus_mining_grid_power_avg
+            name: Grid (rolling avg)
+          # add a line per miner, e.g.:
+          # - entity: sensor.pv_surplus_mining_<id>_power
+          #   name: <name>
 
       - type: history-graph
         title: Fleet ramp (24 h)
@@ -101,7 +104,7 @@ views:
 #          - entity: number.pv_surplus_mining_<id>_max_power        # surplus-ramp cap
 #          - entity: number.pv_surplus_mining_<id>_power_target     # fixed/24-7 power
 #
-# To add a miner's live draw to the energy graph above, add this under that
+# To add a miner draw line to the grid-vs-miner graph above, add this under that
 # graph's `entities:` list:
 #          - entity: sensor.pv_surplus_mining_<id>_power
 #            name: <name> draw
