@@ -48,7 +48,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         self.emergency_stop = False
         self.manual_override = False
         self.manual_state = 0
-        self.max_state = config.max_state
+        self.max_state = self.fleet.max_state  # tracks matrix top; rebuilt on _rebuild_fleet_states
         self.normal_mode = False
         # PV-production mode: when on, the loop tracks PV production (pv_entity)
         # instead of grid surplus — miners ramp to consume the PV output regardless
@@ -96,7 +96,8 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
             "manual_override": self.manual_override,
             "pv_mode": self.pv_mode,
             "manual_state": self.manual_state,
-            "max_state": self.max_state,
+            # max_state is intentionally NOT persisted — it is derived from the
+            # generated matrix top and must not be clamped by a stale saved value.
             "miner_enabled": dict(self.miner_enabled),
             "miner_power_w": dict(self.miner_power_w),
             "miner_max_w": dict(self.miner_max_w),
@@ -109,7 +110,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         for key in ("auto_enabled", "normal_mode", "manual_override", "pv_mode"):
             if key in saved:
                 setattr(self, key, bool(saved[key]))
-        for key in ("manual_state", "max_state"):
+        for key in ("manual_state",):
             if key in saved:
                 setattr(self, key, int(saved[key]))
         for attr, cast in (("miner_enabled", bool), ("miner_power_w", int), ("miner_max_w", int)):
@@ -139,6 +140,7 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         self.fleet.states = states
         self._sync_loop_state_power()
         top = max(states)
+        self.max_state = top  # keep in sync with the (re)generated matrix ceiling
         if self.loop.current_state > top:
             self.loop.current_state = top
 

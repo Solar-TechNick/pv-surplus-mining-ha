@@ -392,6 +392,44 @@ async def test_rebuild_uses_fill_generator_runs_s21_alone(hass):
     assert c.fleet.state_power_total(max(c.fleet.states)) == 3300 + 3068 + 3878
 
 
+async def test_max_state_tracks_matrix_top_not_config_cap(hass):
+    """Regression: max_state must track the generated matrix top, not the
+    ControlConfig default of 14. With a 3-miner fleet the matrix has 43+ states;
+    the old bug capped the controller at state 14 (S21+ alone), stranding surplus
+    even when kW of export was available. Fails RED before the coordinator fix."""
+    a = StubCtrl("pp", 1, paused=True, min_power_w=817, max_power_w=6435)
+    b = StubCtrl("pr", 2, paused=True, min_power_w=944, max_power_w=6435)
+    s = StubCtrl("s", 3, paused=True, min_power_w=2457, max_power_w=6435)
+    s.cfg.efficiency_rank = 0; a.cfg.efficiency_rank = 1; b.cfg.efficiency_rank = 2
+    fleet = FleetController({"pp": a, "pr": b, "s": s}, {0: {
+        "pp": FleetStateTarget(action="sleep"), "pr": FleetStateTarget(action="sleep"),
+        "s": FleetStateTarget(action="sleep")}})
+    c = PvSurplusCoordinator(
+        hass, ControlConfig(loop_interval_s=10, avg_window_s=10, fleet_state_step_w=200),
+        fleet, grid_entity="sensor.g", import_positive=True)
+    c.miner_max_w = {"pp": 3300, "pr": 3068, "s": 3878}
+    c._rebuild_fleet_states()
+
+    # After rebuild, max_state must equal the matrix top (≥42 for this 3-miner fleet)
+    assert c.max_state == c.fleet.max_state, (
+        f"max_state={c.max_state} != fleet.max_state={c.fleet.max_state}; "
+        "expected max_state to track the generated matrix top"
+    )
+
+    # A large sustained export must ramp to a multi-miner state, not stay capped at
+    # the S21+-alone state (state 14 in the old default, which has only 1 active miner).
+    c.loop.export_sustained_s = 999          # timers already elapsed
+    c.loop.seconds_since_last_transition = 999
+    hass.states.async_set("sensor.g", "-10000")  # 10 kW surplus
+    data = await c._async_update_data()
+    target = data["target_state"]
+    active_count = sum(1 for t in c.fleet.states[target].values() if t.action == "active")
+    assert active_count >= 2, (
+        f"target state {target} has only {active_count} active miner(s); "
+        f"max_state={c.max_state}, fleet.max_state={c.fleet.max_state} — max_state cap not fixed"
+    )
+
+
 async def test_surplus_mode_ignores_pv(hass):
     """With PV mode off (default), the grid drives the loop and PV is display-only."""
     cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,
