@@ -45,6 +45,10 @@ class ControlConfig(BaseModel):
     # Granularity of the auto-generated fleet-state matrix (watts per within-miner
     # ramp step). Independent of step_up_export_threshold_w (the surplus gate).
     fleet_state_step_w: int = 200
+    # Extra export headroom (W) required to step to a HIGHER fleet state than the
+    # current one. Damps flapping when the surplus hovers near a state boundary
+    # (e.g. swapping a low-min S19j for the S21+ at its 2457 W minimum).
+    snap_hysteresis_w: int = 100
     step_up_required_duration_s: float = 180.0
     step_down_import_threshold_w: int = 250
     step_down_required_duration_s: float = 30.0

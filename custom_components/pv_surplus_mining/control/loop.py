@@ -65,9 +65,11 @@ class ControllerLoop:
         current_draw = (self.actual_draw_w if self.actual_draw_w is not None
                         else self.state_power_w.get(self.current_state, 0.0))
         budget = current_draw + export - self.config.export_reserve_w
+        hys = self.config.snap_hysteresis_w
         best = 0
         for sid, total in sorted(self.state_power_w.items(), key=lambda kv: kv[1]):
-            if total <= budget:
+            margin = hys if sid > self.current_state else 0
+            if total <= budget - margin:
                 best = sid
         return best
 

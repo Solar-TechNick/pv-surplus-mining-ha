@@ -92,3 +92,32 @@ def test_surplus_target_defaults_to_current_without_matrix():
     loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10), max_available_state=14, current_state=3)
     loop.tick(-5000, ControlInputs(auto_enabled=True))
     assert loop.surplus_target_state == 3
+
+
+def test_snap_hysteresis_blocks_step_up_without_margin():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=0, snap_hysteresis_w=200),
+                          max_available_state=14, current_state=1)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.actual_draw_w = 0
+    # budget = 0 + 2100 - 0 = 2100; stepping above current(1) needs 2000+200=2200 -> stay at 1
+    loop.tick(-2100, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 1
+
+
+def test_snap_hysteresis_allows_step_up_with_margin():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=0, snap_hysteresis_w=200),
+                          max_available_state=14, current_state=1)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.actual_draw_w = 0
+    loop.tick(-2300, ControlInputs(auto_enabled=True))   # 2300 >= 2000+200
+    assert loop.surplus_target_state == 2
+
+
+def test_snap_hysteresis_does_not_bias_step_down():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=0, snap_hysteresis_w=200),
+                          max_available_state=14, current_state=3)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.actual_draw_w = 0
+    # budget 2100; dropping to state 2 (2000<=2100) has no margin -> target 2
+    loop.tick(-2100, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 2
