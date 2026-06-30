@@ -19,7 +19,7 @@ from .control.loop import ControlInputs, ControllerLoop
 from .errors import AdapterError
 from .fleet import FleetController
 from .fleet_states import (
-    generate_fleet_states, generate_s21_priority_states, load_fleet_states, validate_fleet_states,
+    generate_fleet_states, generate_surplus_fill_states, load_fleet_states, validate_fleet_states,
 )
 from .miner import AioBraiinsClient, MinerConfig, MinerController
 from .models import ControlConfig, FleetStateTarget
@@ -129,11 +129,10 @@ class PvSurplusCoordinator(DataUpdateCoordinator):
         gen = [
             {"id": c.cfg.id, "min_power_w": c.cfg.min_power_w,
              "cap": int(self.miner_max_w.get(mid) or c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
-             "default_power_w": int(self.miner_max_w.get(mid) or c.cfg.power_targets_w.get("normal") or c.cfg.max_power_w),
-             "priority": c.cfg.priority}
+             "efficiency_rank": c.cfg.efficiency_rank}
             for mid, c in self.fleet.miners.items() if self.miner_enabled.get(mid, True)
         ]
-        states = generate_s21_priority_states(gen, self.config.fleet_state_step_w) if gen else {0: {}}
+        states = generate_surplus_fill_states(gen, self.config.fleet_state_step_w) if gen else {0: {}}
         for sid in list(states):
             for mid in self.fleet.miners:
                 states[sid].setdefault(mid, FleetStateTarget(action="sleep"))
@@ -372,6 +371,7 @@ async def async_build_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Pv
             min_power_w=m["min_power_w"], max_power_w=m["max_power_w"],
             power_targets_w={"normal": _default_w(m)},
             command_cooldown_sec=m.get("command_cooldown_sec", 120),
+            efficiency_rank=m.get("efficiency_rank"),
             username=m.get("username", "root"),
         )
         miners[mc.id] = MinerController(mc, AioBraiinsClient(mc, m["password"], session))
@@ -381,8 +381,8 @@ async def async_build_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Pv
         states = load_fleet_states(path)
     else:
         gen = [{"id": m["id"], "min_power_w": m["min_power_w"], "cap": _default_w(m),
-                "default_power_w": _default_w(m), "priority": m.get("priority", 1)} for m in cfg[CONF_MINERS]]
-        states = generate_s21_priority_states(gen, control.fleet_state_step_w)
+                "efficiency_rank": m.get("efficiency_rank")} for m in cfg[CONF_MINERS]]
+        states = generate_surplus_fill_states(gen, control.fleet_state_step_w)
     validate_fleet_states(states, set(miners))
     fleet = FleetController(miners, states)
 

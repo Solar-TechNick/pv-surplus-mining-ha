@@ -374,6 +374,24 @@ async def test_pv_mode_unknown_pv_holds(hass):
     assert a.applied == []
 
 
+async def test_rebuild_uses_fill_generator_runs_s21_alone(hass):
+    a = StubCtrl("pp", 1, paused=True, min_power_w=817, max_power_w=6435)
+    b = StubCtrl("pr", 2, paused=True, min_power_w=944, max_power_w=6435)
+    s = StubCtrl("s", 3, paused=True, min_power_w=2457, max_power_w=6435)
+    s.cfg.efficiency_rank = 0; a.cfg.efficiency_rank = 1; b.cfg.efficiency_rank = 2
+    fleet = FleetController({"pp": a, "pr": b, "s": s}, {0: {
+        "pp": FleetStateTarget(action="sleep"), "pr": FleetStateTarget(action="sleep"),
+        "s": FleetStateTarget(action="sleep")}})
+    c = PvSurplusCoordinator(hass, ControlConfig(loop_interval_s=10, avg_window_s=10, fleet_state_step_w=200),
+                             fleet, grid_entity="sensor.g", import_positive=True)
+    c.miner_max_w = {"pp": 3300, "pr": 3068, "s": 3878}
+    c._rebuild_fleet_states()
+    # there is now a state running the S21+ alone (impossible with the old matrix)
+    assert any(t["s"].action == "active" and t["pp"].action == "sleep" and t["pr"].action == "sleep"
+               for t in c.fleet.states.values())
+    assert c.fleet.state_power_total(max(c.fleet.states)) == 3300 + 3068 + 3878
+
+
 async def test_surplus_mode_ignores_pv(hass):
     """With PV mode off (default), the grid drives the loop and PV is display-only."""
     cfg = ControlConfig(loop_interval_s=10, avg_window_s=10, enabled_default=True,

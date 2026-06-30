@@ -50,6 +50,7 @@ class MinerConfig(BaseModel):
     max_power_w: int
     power_targets_w: dict[str, int | None] = Field(default_factory=dict)
     command_cooldown_sec: int = 120
+    efficiency_rank: int | None = None
     username: str = "root"
 
 
