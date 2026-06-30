@@ -108,12 +108,10 @@ Two ready-made matrices are in `examples/`:
 
 - [`fleet-states.yaml`](examples/fleet-states.yaml) — **lowest-minimum first**
   (S19j Pro+ → S19j Pro → S21+), coarse ~700 W steps. Captures small surpluses.
-- [`fleet-states-s21-priority.yaml`](examples/fleet-states-s21-priority.yaml) —
-  **S21+ priority**, fine ~200 W steps: the efficient S21+ is ramped to full
-  first (most hashrate per watt), then the S19j units. Best paired with the
-  snap-to-surplus ramp. Regenerate it for your fleet with
-  [`scripts/gen_s21_priority_matrix.py`](scripts/gen_s21_priority_matrix.py)
-  (edit the per-miner min/default values at the top).
-
-The S21+'s high minimum power (2457 W) means it can only run on a large surplus;
-below that, the low-minimum S19j Pro+ holds the small surplus.
+From v0.5.0 the matrix is **auto-generated** using a surplus-fill algorithm: each
+rung is the highest-hashrate allocation that fits the current surplus budget, any
+miner can run alone, the most efficient miner that fits the budget is chosen first,
+and a low-minimum S19j soaks surplus below the S21+'s 2457 W entry point rather
+than letting it flow to the grid. Operator state (automation on/off, mode, per-miner
+caps) now survives HA restarts and options changes; a **Controller engaged** binary
+sensor shows when the controller is in observe-only mode.

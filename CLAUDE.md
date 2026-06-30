@@ -125,6 +125,18 @@ dynamic miner add/edit + options flow for tuning); `__init__.py` setup/unload an
 - **Matrix is auto-generated** from per-miner min/cap unless a `fleet_states_path`
   file exists, in which case it's loaded as-is and never regenerated
   (`_matrix_generated`).
+- **Operator state persists** (`store.py`): `auto_enabled`, the mode switches, and
+  per-miner enable/power/cap are saved to an HA `Store` and restored *before* the
+  first control tick, so a restart/reload/options-edit no longer silently disables
+  the controller. `enabled_default` is `True` (fresh installs run; persisted state
+  wins thereafter). A `binary_sensor` "Controller engaged" exposes engaged vs
+  observe-only plus the decision `reason`.
+- **Matrix = surplus-fill, not S21-priority** (`generate_surplus_fill_states`): each
+  rung is the highest-hashrate allocation that fits the budget — any miner may run
+  ALONE and a less-efficient S19j soaks surplus the S21+ can't (below its min / above
+  its cap). Ranking uses per-miner `efficiency_rank` (lower = more efficient), else
+  descending `min_power_w`. `snap_hysteresis_w` adds step-up headroom so swaps near a
+  boundary don't flap.
 - Secrets: miner passwords live only in HA's encrypted `.storage`, never in repo files.
 
 ## Tests

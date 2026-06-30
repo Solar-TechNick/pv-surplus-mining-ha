@@ -118,3 +118,15 @@ def test_fill_single_miner_ramps_min_to_cap():
 
 def test_fill_empty_fleet_is_state_zero_only():
     assert generate_surplus_fill_states([], step_w=200) == {0: {}}
+
+
+def test_field_scenario_uses_surplus_instead_of_stranding_one_miner():
+    """Regression for the live bug: ~2.7 kW available (705 W draw + ~2.0 kW export)
+    with reserve 300 -> budget ~2.4 kW must drive WAY more than the old 817 W pilot,
+    and the S21+ must be reachable alone as surplus grows."""
+    states = generate_surplus_fill_states(FILL_MINERS, step_w=200)
+    totals = {sid: _total(states[sid]) for sid in states}
+    best_at_2400 = max(t for t in totals.values() if t <= 2400)
+    assert best_at_2400 >= 2000, f"only soaks {best_at_2400} W of a ~2.4 kW budget"
+    # S21+ comes online (alone) once the budget supports its 2457 W minimum
+    assert any(states[s]["s"].action == "active" for s in states)
