@@ -92,3 +92,58 @@ def test_surplus_target_defaults_to_current_without_matrix():
     loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10), max_available_state=14, current_state=3)
     loop.tick(-5000, ControlInputs(auto_enabled=True))
     assert loop.surplus_target_state == 3
+
+
+def test_snap_hysteresis_blocks_step_up_without_margin():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=0, snap_hysteresis_w=200),
+                          max_available_state=14, current_state=1)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.actual_draw_w = 0
+    # budget = 0 + 2100 - 0 = 2100; stepping above current(1) needs 2000+200=2200 -> stay at 1
+    loop.tick(-2100, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 1
+
+
+def test_snap_hysteresis_allows_step_up_with_margin():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=0, snap_hysteresis_w=200),
+                          max_available_state=14, current_state=1)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.actual_draw_w = 0
+    loop.tick(-2300, ControlInputs(auto_enabled=True))   # 2300 >= 2000+200
+    assert loop.surplus_target_state == 2
+
+
+def test_snap_hysteresis_does_not_bias_step_down():
+    loop = ControllerLoop(_cfg(avg_window_s=10, loop_interval_s=10, export_reserve_w=0, snap_hysteresis_w=200),
+                          max_available_state=14, current_state=3)
+    loop.state_power_w = {0: 0, 1: 1000, 2: 2000, 3: 3000}
+    loop.actual_draw_w = 0
+    # budget 2100; dropping to state 2 (2000<=2100) has no margin -> target 2
+    loop.tick(-2100, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 2
+
+
+def test_budget_uses_time_consistent_available_not_lagged_export():
+    # Live over-commit reproduction (the import/oscillation seen in the field):
+    # the budget must be the CONSERVED 'available' (draw + instantaneous export),
+    # averaged over the window — NOT instantaneous draw + the 60s-AVERAGED export.
+    # During a transient (a miner drops out, then recovers) the averaged export
+    # lags high while measured draw jumps, so the old mixed-time-base budget
+    # double-counts headroom and over-commits to a too-high state, which then
+    # imports once the slow tuner delivers the committed draw.
+    loop = ControllerLoop(_cfg(avg_window_s=30, loop_interval_s=10, export_reserve_w=300, snap_hysteresis_w=0),
+                          max_available_state=40, current_state=28)
+    loop.state_power_w = {0: 0, 28: 6946, 29: 7800, 32: 8400}
+    # Phase A: a miner is dropped out -> low measured draw, high export. The true
+    # available (draw + export) is ~7500 W (≈ PV - house) the whole time.
+    loop.actual_draw_w = 3500
+    loop.tick(-4000, ControlInputs(auto_enabled=True))
+    loop.actual_draw_w = 3500
+    loop.tick(-4000, ControlInputs(auto_enabled=True))
+    # Phase B: miner recovers -> instantaneous draw jumps to 6000, grid reflects it
+    # (export falls to 1500); available is STILL ~7500. Old code: 6000 + avg_export
+    # (~3167) - 300 = ~8867 -> state 32 (over-commit). Fixed: avg(available 7500)
+    # - 300 = 7200 -> state 28.
+    loop.actual_draw_w = 6000
+    loop.tick(-1500, ControlInputs(auto_enabled=True))
+    assert loop.surplus_target_state == 28

@@ -21,6 +21,7 @@ def _entry_data(path):
                        "power_targets_w": {"normal": 3000}}],
         CONF_GRID_ENTITY: "sensor.grid_power", CONF_IMPORT_POSITIVE: True,
         CONF_FLEET_STATES_PATH: str(path),
+        "enabled_default": False,
     }
 
 
@@ -106,3 +107,21 @@ async def test_normal_mode_switch_toggles_coordinator(hass, tmp_path):
             {"entity_id": switch_entity_id}, blocking=True,
         )
         assert coordinator.normal_mode is False
+
+
+async def test_engaged_binary_sensor_reports_status(hass, tmp_path):
+    fleet_file = tmp_path / "fleet-states.yaml"; fleet_file.write_text(FLEET_YAML)
+    hass.states.async_set("sensor.grid_power", "100")
+    entry = MockConfigEntry(domain=DOMAIN, data=_entry_data(fleet_file), title="PV-Surplus Mining")
+    entry.add_to_hass(hass)
+    with aioresponses() as m:
+        _mock_miner(m)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        all_bs = [s.entity_id for s in hass.states.async_all("binary_sensor")]
+        matches = [eid for eid in all_bs if "engaged" in eid]
+        assert matches, f"No engaged binary_sensor; registered: {all_bs}"
+        st = hass.states.get(matches[0])
+        assert st.state == "off"                       # enabled_default=False in _entry_data
+        assert "reason" in st.attributes

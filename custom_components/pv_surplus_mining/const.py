@@ -1,6 +1,6 @@
 DOMAIN = "pv_surplus_mining"
 
-PLATFORMS: list[str] = ["sensor", "switch", "number"]
+PLATFORMS: list[str] = ["sensor", "switch", "number", "binary_sensor"]
 
 # Config-entry data keys
 CONF_MINERS = "miners"            # list[dict]: {id, model, ip, priority, username, password, min_power_w, max_power_w}

@@ -194,13 +194,17 @@ async def test_options_tuning_roundtrip(hass):
     )
     assert result["step_id"] == "tuning"
 
-    # Submit full ControlConfig field set; change loop_interval_s to 15.0
-    # Float fields must be submitted as floats (schema type is float)
+    # Submit tunable ControlConfig fields; change loop_interval_s to 15.0.
+    # max_state is intentionally absent: it is matrix-derived and excluded from
+    # the tuning form (the "Max state" NUMBER entity is the run-time throttle).
+    # Float fields must be submitted as floats (schema type is float).
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {
             "enabled_default": False,
             "loop_interval_s": 15.0,
             "export_reserve_w": 300,
+            "fleet_state_step_w": 200,
+            "snap_hysteresis_w": 100,
             "step_up_export_threshold_w": 700,
             "step_up_required_duration_s": 180.0,
             "step_down_import_threshold_w": 250,
@@ -209,7 +213,6 @@ async def test_options_tuning_roundtrip(hass):
             "emergency_required_duration_s": 5.0,
             "min_state_dwell_s": 120.0,
             "fallback_state": 0,
-            "max_state": 14,
             "avg_window_s": 60.0,
         }
     )

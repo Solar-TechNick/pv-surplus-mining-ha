@@ -51,23 +51,32 @@ class ControllerLoop:
         # and over-commits the fleet to high states, which then overshoot the real
         # surplus, import, and trip the fleet off.
         self.actual_draw_w: float | None = None
+        # Rolling average of the CONSERVED "available" power (draw + instantaneous
+        # export) — the budget signal. Kept separate from grid_avg_w (which still
+        # gates the sustained-export/import timers on averaged grid).
+        self.avail_avg_w = 0.0
         dt = config.loop_interval_s
         self._window: deque[float] = deque(maxlen=max(1, round(config.avg_window_s / dt)))
+        self._avail_window: deque[float] = deque(maxlen=max(1, round(config.avg_window_s / dt)))
 
     def _surplus_target(self) -> int:
-        """Highest fleet state whose total power fits the current surplus budget:
-        what the running fleet ACTUALLY draws now + the exported surplus - the
-        reserve buffer we want to keep exporting. Falls back to the current state
-        when the matrix totals are unknown (no snapping)."""
+        """Highest fleet state whose total power fits the current surplus budget.
+
+        The budget is the rolling-average CONSERVED available power (what the fleet
+        actually draws + the instantaneous exported surplus, ≈ PV − house load) minus
+        the reserve we keep exporting. It is computed from `avail_avg_w` — NOT from
+        instantaneous draw plus averaged export, which mix time bases and over-count
+        headroom during transients (a miner dropping out then recovering), causing
+        over-commit and grid import. Falls back to the current state when the matrix
+        totals are unknown (no snapping)."""
         if not self.state_power_w:
             return self.current_state
-        export = -self.grid_avg_w
-        current_draw = (self.actual_draw_w if self.actual_draw_w is not None
-                        else self.state_power_w.get(self.current_state, 0.0))
-        budget = current_draw + export - self.config.export_reserve_w
+        budget = self.avail_avg_w - self.config.export_reserve_w
+        hys = self.config.snap_hysteresis_w
         best = 0
         for sid, total in sorted(self.state_power_w.items(), key=lambda kv: kv[1]):
-            if total <= budget:
+            margin = hys if sid > self.current_state else 0
+            if total <= budget - margin:
                 best = sid
         return best
 
@@ -78,6 +87,14 @@ class ControllerLoop:
 
         self._window.append(grid_w)
         self.grid_avg_w = mean(self._window)
+
+        # Budget signal: average the conserved available power (draw + instantaneous
+        # export) over the same window, so a fast change in either term stays
+        # internally consistent (see _surplus_target). -grid_w = exported surplus.
+        current_draw = (self.actual_draw_w if self.actual_draw_w is not None
+                        else self.state_power_w.get(self.current_state, 0.0))
+        self._avail_window.append(current_draw - grid_w)
+        self.avail_avg_w = mean(self._avail_window)
 
         self.export_sustained_s = (
             self.export_sustained_s + dt if self.grid_avg_w <= -c.step_up_export_threshold_w else 0.0

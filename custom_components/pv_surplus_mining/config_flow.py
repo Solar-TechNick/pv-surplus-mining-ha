@@ -21,6 +21,10 @@ from .models import ControlConfig
 
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
 _CONTROL_KEYS = list(ControlConfig.model_fields.keys())
+# max_state is matrix-derived (tracks the generated top); exclude it from the
+# tuning form so users cannot set a stale cap via config. The "Max state" NUMBER
+# entity still serves as a transient run-time throttle.
+_TUNING_EXCLUDE = {"max_state"}
 
 
 def _hub_schema(d: dict) -> vol.Schema:
@@ -63,10 +67,11 @@ def _edit_schema(m: dict) -> vol.Schema:
 
 
 def _tuning_schema(opts: dict) -> vol.Schema:
-    cur = {**ControlConfig().model_dump(), **{k: opts[k] for k in _CONTROL_KEYS if k in opts}}
+    tuning_keys = [k for k in _CONTROL_KEYS if k not in _TUNING_EXCLUDE]
+    cur = {**ControlConfig().model_dump(), **{k: opts[k] for k in tuning_keys if k in opts}}
     return vol.Schema({
         vol.Required(k, default=cur[k]): (bool if isinstance(cur[k], bool) else (int if isinstance(cur[k], int) else float))
-        for k in _CONTROL_KEYS
+        for k in tuning_keys
     })
 
 

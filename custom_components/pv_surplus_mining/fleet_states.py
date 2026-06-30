@@ -45,55 +45,65 @@ def _ramp_levels(lo: int, hi: int, step_w: int) -> list[int]:
     return [round(lo + (hi - lo) * k / n) for k in range(0, n + 1)]
 
 
-def generate_s21_priority_states(miners: list[dict], step_w: int) -> dict[int, dict[str, "FleetStateTarget"]]:
-    """Fine-grained, efficiency-priority matrix for the S21+/S19j/S19j fleet.
+def generate_surplus_fill_states(miners: list[dict], step_w: int) -> dict[int, dict[str, "FleetStateTarget"]]:
+    """Efficiency-aware 'fill the surplus' matrix.
 
-    The most efficient miner (the S21+) has the highest power-target minimum, so
-    it cannot run on small surplus. This matrix therefore:
-      1. runs the lowest-minimum miner alone to hold tiny surplus,
-      2. ramps the highest-minimum (most efficient) miner to its cap FIRST,
-      3. adds the remaining miner, then ramps the two lower-minimum units up.
-    ``cap`` is each miner's maximum ramp power (e.g. the per-miner max-power
-    control). Ramps use ~``step_w`` increments and totals stay monotonic.
+    Each rung is the highest-hashrate miner allocation whose total power fits a
+    given budget: load the most-efficient runnable miner toward its cap first,
+    then the next, never running a miner below its minimum. Because exported
+    energy earns nothing, any miner may run ALONE and a less-efficient miner
+    soaks surplus the efficient one cannot (below its minimum or above its cap).
 
-    For fleets that are not exactly three miners this falls back to the
-    lowest-minimum-first ``generate_fleet_states`` (which expects
-    ``default_power_w`` per miner)."""
-    if len(miners) != 3:
-        return generate_fleet_states(miners, step_w)
+    miners: list of ``{id, min_power_w, cap, efficiency_rank?}``. Lower
+    ``efficiency_rank`` = more efficient (filled first); when absent, miners are
+    ranked by DESCENDING ``min_power_w`` (the high-minimum Antminers are the
+    efficient ones). ``step_w`` sets the budget granularity.
 
-    pilot, middle, priority = sorted(miners, key=lambda m: m["min_power_w"])
-    pid, pmin, pcap = pilot["id"], pilot["min_power_w"], int(pilot["cap"])
-    mid_, mmin, mcap = middle["id"], middle["min_power_w"], int(middle["cap"])
-    sid_, smin, scap = priority["id"], priority["min_power_w"], int(priority["cap"])
+    Returns ``{state_id: {miner_id: FleetStateTarget}}`` with state 0 = all
+    sleep, totals monotonic non-decreasing, every miner present in every state,
+    and the top state = every miner at its cap.
+    """
+    if not miners:
+        return {0: {}}
+    ids = [m["id"] for m in miners]
+    caps = {m["id"]: int(m["cap"]) for m in miners}
+    mins = {m["id"]: int(m["min_power_w"]) for m in miners}
 
-    seq: list[dict[str, int | None]] = []
+    def _rank(m):
+        r = m.get("efficiency_rank")
+        return (0, int(r)) if r is not None else (1, -int(m["min_power_w"]))
+    order = sorted(miners, key=_rank)
 
-    def st(**w):
-        seq.append({pid: w.get(pid), mid_: w.get(mid_), sid_: w.get(sid_)})
+    def allocate(budget: int) -> dict[str, int]:
+        """Max-hashrate allocation with total <= budget (greedy by efficiency)."""
+        remaining = budget
+        alloc = {mid: 0 for mid in ids}
+        for m in order:
+            mid = m["id"]
+            if remaining >= mins[mid]:
+                p = min(caps[mid], remaining)
+                alloc[mid] = p
+                remaining -= p
+        return alloc
 
-    st()                                                # 0: all off
-    st(**{pid: pmin})                                   # pilot holds tiny surplus
-    for lvl in _ramp_levels(smin, scap, step_w):        # priority ramps to cap first
-        st(**{pid: pmin, sid_: lvl})
-    st(**{pid: pmin, sid_: scap, mid_: mmin})           # middle joins at its minimum
-    for lvl in _ramp_levels(pmin, pcap, step_w)[1:]:    # ramp pilot to cap
-        st(**{pid: lvl, sid_: scap, mid_: mmin})
-    for lvl in _ramp_levels(mmin, mcap, step_w)[1:]:    # ramp middle to cap
-        st(**{pid: pcap, sid_: scap, mid_: lvl})
+    total_cap = sum(caps.values())
+    budgets = list(range(0, total_cap + 1, max(1, step_w)))
+    if budgets[-1] != total_cap:
+        budgets.append(total_cap)
 
-    deduped = [seq[0]]
-    for s in seq[1:]:
-        if s != deduped[-1]:                            # rounding can repeat an endpoint
-            deduped.append(s)
+    seq: list[dict[str, int]] = []
+    for b in budgets:
+        a = allocate(b)
+        if not seq or a != seq[-1]:
+            seq.append(a)
 
     return {
         idx: {
-            m: (FleetStateTarget(action="active", power_w=int(w)) if w
-                else FleetStateTarget(action="sleep"))
-            for m, w in s.items()
+            mid: (FleetStateTarget(action="active", power_w=int(w)) if w
+                  else FleetStateTarget(action="sleep"))
+            for mid, w in a.items()
         }
-        for idx, s in enumerate(deduped)
+        for idx, a in enumerate(seq)
     }
 
 

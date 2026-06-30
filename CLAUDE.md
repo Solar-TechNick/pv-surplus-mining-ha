@@ -20,8 +20,8 @@ python -m pytest tests/test_decision.py     # one file
 python -m pytest tests/test_decision.py::test_ramp_up_snaps_directly_to_surplus_target  # one test
 python -m pytest -k snap                     # by keyword
 
-# Regenerate the example S21+-priority fleet matrix (edit per-miner min/default at top first):
-python scripts/gen_s21_priority_matrix.py
+# scripts/gen_s21_priority_matrix.py is legacy — the matrix is now auto-generated
+# by generate_surplus_fill_states at startup. Keep the script for reference only.
 ```
 
 CI: `.github/workflows/test.yml` (pytest on 3.13) and `validate.yml`
@@ -46,13 +46,18 @@ wrapped by stateful/IO layers so the hard logic is testable without HA or networ
    calls `decide()` once per tick. Still no IO. Computes `surplus_target_state` via
    **snap-to-surplus**: the highest fleet state whose total watts fit the current
    surplus budget, so ramps jump straight to the matching state instead of stepping
-   one at a time (time gates still apply). The budget is **`actual_draw_w` (MEASURED
-   fleet draw, set by the coordinator each tick) + export − reserve** — NOT the
-   current state's matrix total. This matters: the Braiins tuner reaches a power
-   target only after ramping for minutes, so matrix totals over-state real draw; an
-   earlier version anchored on the matrix total, over-committed the fleet to the top
-   state, then the slow-ramping miners overshot the surplus, imported, and the
-   emergency cutoff tripped the whole fleet off — even with kW of surplus present.
+   one at a time (time gates + `snap_hysteresis_w` still apply). The budget is the
+   rolling average of the **CONSERVED available power = `actual_draw_w` (MEASURED
+   fleet draw) + instantaneous export − reserve** (`avail_avg_w`) — NOT the matrix
+   total, and NOT instantaneous draw mixed with *averaged* export. Two failure modes
+   this avoids: (a) anchoring on the matrix total over-states real draw (the slow
+   Braiins tuner only reaches a target after minutes) → over-commit → overshoot →
+   import → emergency cutoff; (b) mixing instantaneous draw with the 60 s-averaged
+   export breaks conservation during a transient (a miner dropping out then
+   recovering) — measured draw jumps while the export average still lags high, so the
+   budget double-counts headroom and over-commits → import. Averaging the conserved
+   `draw + instantaneous export` keeps it internally consistent. (`grid_avg_w` still
+   gates the sustained-export/import timers — averaged grid is correct there.)
 
 3. **`coordinator.py` — `PvSurplusCoordinator(DataUpdateCoordinator)`** — the IO
    orchestrator, ticking every `loop_interval_s`. Reads grid/PV sensors, builds
@@ -73,10 +78,13 @@ wrapped by stateful/IO layers so the hard logic is testable without HA or networ
    serialized writer per miner (the coordinator loop).
 
 6. **`fleet_states.py`** — load/validate a YAML matrix, or generate one.
-   `generate_s21_priority_states` (efficiency-priority, **exactly 3 miners**) ramps
-   the most-efficient/highest-minimum S21+ to cap first; otherwise falls back to
-   `generate_fleet_states` (lowest-minimum-first). State **0 = all miners safe/off**
-   is mandatory.
+   `generate_surplus_fill_states` (efficiency-aware "fill the surplus" ladder): each
+   rung is the highest-hashrate allocation fitting the current budget; any miner may
+   run alone; a less-efficient miner soaks surplus the efficient one can't. Miners are
+   ranked by per-miner `efficiency_rank` (lower = more efficient), falling back to
+   descending `min_power_w`. Works for any fleet size. The legacy
+   `generate_fleet_states` (lowest-minimum-first) remains as a helper.
+   State **0 = all miners safe/off** is mandatory.
 
 7. **`models.py`** — pydantic models. `ControlConfig` is the single source of truth
    for every tunable and its default (loop interval, thresholds, durations, dwell,
@@ -125,6 +133,18 @@ dynamic miner add/edit + options flow for tuning); `__init__.py` setup/unload an
 - **Matrix is auto-generated** from per-miner min/cap unless a `fleet_states_path`
   file exists, in which case it's loaded as-is and never regenerated
   (`_matrix_generated`).
+- **Operator state persists** (`store.py`): `auto_enabled`, the mode switches, and
+  per-miner enable/power/cap are saved to an HA `Store` and restored *before* the
+  first control tick, so a restart/reload/options-edit no longer silently disables
+  the controller. `enabled_default` is `True` (fresh installs run; persisted state
+  wins thereafter). A `binary_sensor` "Controller engaged" exposes engaged vs
+  observe-only plus the decision `reason`.
+- **Matrix = surplus-fill, not S21-priority** (`generate_surplus_fill_states`): each
+  rung is the highest-hashrate allocation that fits the budget — any miner may run
+  ALONE and a less-efficient S19j soaks surplus the S21+ can't (below its min / above
+  its cap). Ranking uses per-miner `efficiency_rank` (lower = more efficient), else
+  descending `min_power_w`. `snap_hysteresis_w` adds step-up headroom so swaps near a
+  boundary don't flap.
 - Secrets: miner passwords live only in HA's encrypted `.storage`, never in repo files.
 
 ## Tests
