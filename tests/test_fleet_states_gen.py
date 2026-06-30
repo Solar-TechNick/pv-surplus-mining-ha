@@ -120,6 +120,19 @@ def test_fill_empty_fleet_is_state_zero_only():
     assert generate_surplus_fill_states([], step_w=200) == {0: {}}
 
 
+def test_fill_fallback_ranks_by_descending_min():
+    # No efficiency_rank: higher min_power_w = treated as more efficient, fills first.
+    miners = [
+        {"id": "lo", "min_power_w": 500, "cap": 1000},
+        {"id": "hi", "min_power_w": 1500, "cap": 3000},
+    ]
+    states = generate_surplus_fill_states(miners, step_w=500)
+    # At a budget that fits "hi" alone, "hi" runs and "lo" sleeps
+    s = next(sid for sid, tg in states.items()
+             if tg["hi"].action == "active" and tg["lo"].action == "sleep")
+    assert states[s]["hi"].power_w >= 1500
+
+
 def test_field_scenario_uses_surplus_instead_of_stranding_one_miner():
     """Regression for the live bug: ~2.7 kW available (705 W draw + ~2.0 kW export)
     with reserve 300 -> budget ~2.4 kW must drive WAY more than the old 817 W pilot,

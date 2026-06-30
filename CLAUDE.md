@@ -20,8 +20,8 @@ python -m pytest tests/test_decision.py     # one file
 python -m pytest tests/test_decision.py::test_ramp_up_snaps_directly_to_surplus_target  # one test
 python -m pytest -k snap                     # by keyword
 
-# Regenerate the example S21+-priority fleet matrix (edit per-miner min/default at top first):
-python scripts/gen_s21_priority_matrix.py
+# scripts/gen_s21_priority_matrix.py is legacy — the matrix is now auto-generated
+# by generate_surplus_fill_states at startup. Keep the script for reference only.
 ```
 
 CI: `.github/workflows/test.yml` (pytest on 3.13) and `validate.yml`
@@ -73,10 +73,13 @@ wrapped by stateful/IO layers so the hard logic is testable without HA or networ
    serialized writer per miner (the coordinator loop).
 
 6. **`fleet_states.py`** — load/validate a YAML matrix, or generate one.
-   `generate_s21_priority_states` (efficiency-priority, **exactly 3 miners**) ramps
-   the most-efficient/highest-minimum S21+ to cap first; otherwise falls back to
-   `generate_fleet_states` (lowest-minimum-first). State **0 = all miners safe/off**
-   is mandatory.
+   `generate_surplus_fill_states` (efficiency-aware "fill the surplus" ladder): each
+   rung is the highest-hashrate allocation fitting the current budget; any miner may
+   run alone; a less-efficient miner soaks surplus the efficient one can't. Miners are
+   ranked by per-miner `efficiency_rank` (lower = more efficient), falling back to
+   descending `min_power_w`. Works for any fleet size. The legacy
+   `generate_fleet_states` (lowest-minimum-first) remains as a helper.
+   State **0 = all miners safe/off** is mandatory.
 
 7. **`models.py`** — pydantic models. `ControlConfig` is the single source of truth
    for every tunable and its default (loop interval, thresholds, durations, dwell,
