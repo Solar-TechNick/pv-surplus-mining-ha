@@ -30,3 +30,6 @@ secrets.yaml
 
 # SDD scratch (briefs, reports, review diffs, progress ledger)
 .superpowers/
+
+# Local/private Claude context (deployment specifics, not for the shared repo)
+CLAUDE.local.md
